@@ -47,5 +47,11 @@ gtkwave test_case3.vcd
 
 ## txt2sr
 convert txt data file to srzip with tk gui.
+
+```bash
+cd sigrok
+python -m txt2sr.txt2sr
+```
+
 ![txt2sr](./txt2sr/txt2sr.png)
 ![pulseview](./txt2sr/txt2sr_pulseview.png)
