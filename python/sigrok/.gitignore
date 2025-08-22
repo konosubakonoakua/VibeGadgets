@@ -4,3 +4,5 @@
 *.csv
 *.sal
 *.wav
+
+dumps/

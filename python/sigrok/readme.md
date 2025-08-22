@@ -44,3 +44,8 @@ Analog data not working!!!
 sigrok-cli -i test_case3.sr -O vcd -o test_case3.vcd
 gtkwave test_case3.vcd
 ```
+
+## txt2sr
+convert txt data file to srzip with tk gui.
+![txt2sr](./txt2sr/txt2sr.png)
+![pulseview](./txt2sr/txt2sr_pulseview.png)
