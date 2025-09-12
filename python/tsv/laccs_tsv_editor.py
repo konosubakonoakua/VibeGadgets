@@ -32,7 +32,15 @@ class FileTab:
         self.modified = False
 
         self.sort_column = None
-        self.sort_direction = True  # True表示升序，False表示降序
+        self.sort_direction = True
+        
+        # Initialize lazy loading properties
+        self.is_large_file = False
+        self.file_size_threshold = 10 * 1024 * 1024  # Default 10MB threshold
+        self.total_rows = 0
+        self.loaded_chunks = {}
+        self.chunk_size = 100000  # Load 100000 rows per chunk
+        self.currently_visible_range = (0, 0)
         
         # Default template data
         self.template = {
@@ -102,24 +110,107 @@ class FileTab:
         }
         
     def load_data(self):
-        """Load data file"""
+        """Load data file with lazy loading support"""
         try:
-            with open(self.filename, "r") as f:
-                reader = csv.reader(f, delimiter="\t")
-                # First row is always treated as headers
-                self.headers = next(reader)
+            # Initialize lazy loading properties
+            # Use the threshold from parent TableManager instance
+            self.file_size_threshold = self.parent.lazy_load_threshold * 1024 * 1024
+            
+            # Check file size to determine if lazy loading is needed
+            file_size = os.path.getsize(self.filename)
+            if file_size > self.file_size_threshold:
+                self.is_large_file = True
                 
-                # Read all remaining rows as data
-                self.data = [row for row in reader if row]  # Filter empty rows
+                # Just read headers and count total rows without loading all data
+                with open(self.filename, "r") as f:
+                    reader = csv.reader(f, delimiter="\t")
+                    # First row is always treated as headers
+                    self.headers = next(reader)
+                    
+                    # Count total rows
+                    for _ in reader:
+                        self.total_rows += 1
+                        
+                    # Detect file format based on headers
+                    self.detect_format_and_set_template()
                 
-                # Detect file format and set appropriate template
-                self.detect_format_and_set_template()
+                messagebox.showinfo("Info", f"Loading large file: {self.filename}\n" \
+                                   f"Size: {file_size/1024/1024:.2f}MB, Total rows: {self.total_rows}\n" \
+                                   f"Using lazy loading to improve performance.")
+            else:
+                # For small files, load all data as before
+                with open(self.filename, "r") as f:
+                    reader = csv.reader(f, delimiter="\t")
+                    # First row is always treated as headers
+                    self.headers = next(reader)
+                    
+                    # Read all remaining rows as data
+                    self.data = [row for row in reader if row]  # Filter empty rows
+                    self.total_rows = len(self.data)
+                    
+                    # Detect file format and set appropriate template
+                    self.detect_format_and_set_template()
         except FileNotFoundError:
             messagebox.showerror("Error", f"File not found: {self.filename}")
             self.data = []
+            self.total_rows = 0
         except Exception as e:
             messagebox.showerror("Error", f"Error loading file: {str(e)}")
             self.data = []
+            self.total_rows = 0
+    
+    def load_chunk(self, start_row, end_row):
+        """Load a specific chunk of the file"""
+        if not self.is_large_file:
+            return self.data[start_row:end_row] if start_row < len(self.data) else []
+        
+        # Calculate chunk key
+        chunk_start = (start_row // self.chunk_size) * self.chunk_size
+        chunk_end = chunk_start + self.chunk_size - 1
+        chunk_key = (chunk_start, chunk_end)
+        
+        # Check if chunk is already loaded
+        if chunk_key in self.loaded_chunks:
+            # Return the requested portion from the loaded chunk
+            chunk_offset_start = start_row - chunk_start
+            chunk_offset_end = end_row - chunk_start
+            return self.loaded_chunks[chunk_key][chunk_offset_start:chunk_offset_end]
+        
+        # Load the chunk from file
+        try:
+            chunk_data = []
+            with open(self.filename, "r") as f:
+                reader = csv.reader(f, delimiter="\t")
+                # Skip header
+                next(reader)
+                
+                # Skip rows until chunk start
+                for _ in range(chunk_start):
+                    try:
+                        next(reader)
+                    except StopIteration:
+                        break
+                
+                # Read chunk_size rows
+                for _ in range(self.chunk_size):
+                    try:
+                        row = next(reader)
+                        if row:  # Filter empty rows
+                            chunk_data.append(row)
+                    except StopIteration:
+                        break
+            
+            # Store the loaded chunk
+            self.loaded_chunks[chunk_key] = chunk_data
+            
+            # Return the requested portion
+            chunk_offset_start = start_row - chunk_start
+            chunk_offset_end = end_row - chunk_start
+            return chunk_data[chunk_offset_start:chunk_offset_end]
+        except Exception as e:
+            print(f"Error loading chunk: {str(e)}")
+            return []
+            
         
     def detect_format_and_set_template(self):
         """Detect file format based on headers and set appropriate template"""
@@ -159,8 +250,22 @@ class FileTab:
         self.search_entry = tk.Entry(search_frame, textvariable=self.search_var, width=30)
         self.search_entry.pack(side=tk.LEFT, padx=5)
 
-        # Bind search entry to real-time search
-        self.search_var.trace_add("write", lambda *args: self.parent.real_time_search(self))
+        # Create a helper method to handle search
+        def handle_search(event=None):
+            self.parent.real_time_search(self)
+            return "break"  # Prevent default behavior
+        
+        # Always bind Enter key for explicit search
+        self.search_entry.bind("<Return>", handle_search)
+        
+        # Add a custom trace for the search_var that checks is_large_file dynamically
+        def custom_trace(*args):
+            # Only do real-time search if not a large file
+            if not self.is_large_file:
+                self.parent.real_time_search(self)
+        
+        # Set up the trace
+        self.search_var.trace_add("write", custom_trace)
         
         # Bind ESC key to exit search
         self.search_entry.bind("<Escape>", lambda event: self.cancel_operation())
@@ -213,13 +318,20 @@ class FileTab:
         table_frame = tk.Frame(self.tab_frame)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Table
-        self.tree = ttk.Treeview(table_frame, columns=self.headers, show="headings")
+        # Add row number column to headers
+        self.headers_with_index = ["#"] + self.headers
+        
+        # Table with index column
+        self.tree = ttk.Treeview(table_frame, columns=self.headers_with_index, show="headings")
 
         # Set column headings with sorting functionality
-        for col in self.headers:
-            self.tree.heading(col, text=col, command=lambda _col=col: self.sort_by_column(_col))
-            self.tree.column(col, width=100, anchor=tk.W, stretch=tk.YES)
+        for col in self.headers_with_index:
+            if col == "#":
+                self.tree.heading(col, text="#")
+                self.tree.column(col, width=50, anchor=tk.CENTER, stretch=tk.NO)
+            else:
+                self.tree.heading(col, text=col, command=lambda _col=col: self.sort_by_column(_col))
+                self.tree.column(col, width=100, anchor=tk.W, stretch=tk.YES)
 
         # Add scrollbars
         v_scrollbar = ttk.Scrollbar(
@@ -1095,18 +1207,150 @@ class FileTab:
                         child.delete(0, tk.END)
 
     def populate_table(self, data=None):
+        """Populate table with data, using lazy loading for large files"""
+        # If search data is provided, use it directly
+        if data is not None:
+            # Clear existing data
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+                
+            # Save current lazy loading state and temporarily disable it for search results
+            was_large_file = self.is_large_file
+            self.is_large_file = False
+            
+            # Add search results with index
+            for i, row in enumerate(data):
+                tag = "EvenRow" if i % 2 == 0 else "OddRow"
+                # Add row number as first column
+                row_with_index = [str(i + 1)] + row
+                self.tree.insert("", tk.END, values=row_with_index, tags=(tag,))
+            
+            self.tree.tag_configure("OddRow", background="#ffffff")
+            self.tree.tag_configure("EvenRow", background="#f0f0f0")
+            
+            # Restore lazy loading state after search
+            self.is_large_file = was_large_file
+            return
+            
         # Clear existing data
         for item in self.tree.get_children():
             self.tree.delete(item)
-
-        # Add new data with alternating row highlighting
-        display_data = data if data is not None else self.data
-        for i, row in enumerate(display_data):
-            tag = "EvenRow" if i % 2 == 0 else "OddRow"
-            self.tree.insert("", tk.END, values=row, tags=(tag,))
+            
+        # If it's a small file or real-time search is active, load all data
+        if not self.is_large_file:
+            display_data = self.data
+            for i, row in enumerate(display_data):
+                tag = "EvenRow" if i % 2 == 0 else "OddRow"
+                # Add row number as first column
+                row_with_index = [str(i + 1)] + row
+                self.tree.insert("", tk.END, values=row_with_index, tags=(tag,))
+        else:
+            # For large files, load initial visible portion
+            # Get visible area info
+            visible_height = self.tree.winfo_height()
+            row_height = 25  # Approximate row height from style configuration
+            visible_rows = max(10, visible_height // row_height)  # Load more than visible for smoother scrolling
+            
+            # Load initial chunk
+            initial_data = self.load_chunk(0, visible_rows * 2)
+            
+            # Add data with virtual row IDs for tracking
+            for i, row in enumerate(initial_data):
+                tag = "EvenRow" if i % 2 == 0 else "OddRow"
+                # Add row number as first column
+                row_with_index = [str(i + 1)] + row
+                self.tree.insert("", tk.END, iid=str(i), values=row_with_index, tags=(tag,))
+                
+            # Set virtual total rows for proper scrolling
+            self.tree.configure(height=min(visible_rows, self.total_rows))
+            
+            # Bind to scroll events for lazy loading
+            self.tree.bind("<Configure>", self.on_tree_configure)
+            self.tree.bind("<MouseWheel>", self.on_mouse_wheel)
+            self.tree.bind("<Button-4>", self.on_mouse_wheel)  # Linux scroll up
+            self.tree.bind("<Button-5>", self.on_mouse_wheel)  # Linux scroll down
+            self.tree.bind("<KeyPress>", self.on_key_press)
         
         self.tree.tag_configure("OddRow", background="#ffffff")
         self.tree.tag_configure("EvenRow", background="#f0f0f0")
+        
+    def on_tree_configure(self, event):
+        """Handle treeview configuration changes"""
+        if self.is_large_file:
+            self.update_visible_rows()
+    
+    def on_mouse_wheel(self, event):
+        """Handle mouse wheel scrolling for lazy loading"""
+        if self.is_large_file:
+            # Schedule visible row update after scrolling completes
+            self.tree.after(10, self.update_visible_rows)
+    
+    def on_key_press(self, event):
+        """Handle keyboard navigation for lazy loading"""
+        if self.is_large_file and event.keysym in ('Up', 'Down', 'Prior', 'Next', 'Home', 'End'):
+            # Schedule visible row update after key navigation
+            self.tree.after(10, self.update_visible_rows)
+    
+    def update_visible_rows(self):
+        """Update visible rows based on current scroll position"""
+        if not self.is_large_file:
+            return
+        
+        try:
+            # Get current scroll position
+            y, _ = self.tree.yview()
+            visible_height = self.tree.winfo_height()
+            row_height = 25  # Approximate row height
+            visible_rows = max(10, visible_height // row_height)
+            
+            # Calculate current visible range
+            start_row = int(y * self.total_rows)
+            end_row = min(self.total_rows, start_row + visible_rows * 2)  # Load extra for smooth scrolling
+            
+            # Only update if the visible range has changed significantly
+            if (abs(start_row - self.currently_visible_range[0]) > visible_rows // 2 or 
+                abs(end_row - self.currently_visible_range[1]) > visible_rows // 2):
+                
+                self.currently_visible_range = (start_row, end_row)
+                
+                # Load the visible chunk
+                visible_data = self.load_chunk(start_row, end_row)
+                
+                # Get existing items
+                existing_items = set(self.tree.get_children())
+                
+                # Track which new items need to be added
+                new_items_to_add = []
+                for i, row in enumerate(visible_data):
+                    actual_row = start_row + i
+                    if str(actual_row) not in existing_items:
+                        new_items_to_add.append((actual_row, row))
+                
+                # Track current displayed rows
+                current_displayed_rows = len(self.tree.get_children())
+                
+                # Check if scrolled to bottom (near the end of current data)
+                if end_row >= current_displayed_rows - visible_rows // 2:
+                    # Calculate new load range with chunk size of row increments
+                    new_load_start = current_displayed_rows
+                    new_load_end = min(self.total_rows, current_displayed_rows + self.chunk_size)
+                    
+                    # Load new chunk
+                    new_data = self.load_chunk(new_load_start, new_load_end)
+                    
+                    # Add new rows without clearing existing ones
+                    if new_data:
+                        for i, row in enumerate(new_data):
+                            actual_row = new_load_start + i
+                            tag = "EvenRow" if actual_row % 2 == 0 else "OddRow"
+                            # Add row number as first column
+                            row_with_index = [str(actual_row + 1)] + row
+                            self.tree.insert("", tk.END, iid=str(actual_row), values=row_with_index, tags=(tag,))
+                
+                # Update visible range
+                self.currently_visible_range = (start_row, end_row)
+        except Exception as e:
+            print(f"Error updating visible rows: {str(e)}")
 
     def update_tab_name(self, name):
         self.tab_name = name
@@ -1150,6 +1394,7 @@ class TableManager:
         self.current_tab = None
         self.active_popups = []
         self.backup_enabled = True  # Backup functionality toggle
+        self.lazy_load_threshold = 10  # Default 10MB threshold for lazy loading
         
         # History configuration
         # Use system temp directory for cross-platform compatibility
@@ -1710,6 +1955,15 @@ class TableManager:
         )
         backup_checkbox.pack(side=tk.LEFT)
 
+        # Lazy load threshold setting
+        lazy_load_frame = tk.Frame(button_frame)
+        lazy_load_frame.pack(side=tk.LEFT, padx=5)
+        tk.Label(lazy_load_frame, text="Lazy Load Threshold:").pack(side=tk.LEFT, padx=(0, 5))
+        self.lazy_load_var = tk.StringVar(value=f"{self.lazy_load_threshold}M")
+        threshold_options = ["1M", "5M", "10M", "20M", "50M", "100M"]
+        threshold_menu = tk.OptionMenu(lazy_load_frame, self.lazy_load_var, *threshold_options)
+        threshold_menu.pack(side=tk.LEFT, padx=5)
+        self.lazy_load_var.trace_add("write", lambda *args: self._update_lazy_load_threshold())
 
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.root)
@@ -1723,6 +1977,18 @@ class TableManager:
         
         # Bind middle mouse button click on tab to close current tab
         self.notebook.bind("<Button-2>", self.on_tab_middle_click)
+        
+    def _update_lazy_load_threshold(self):
+        """Update the lazy load threshold when user changes the setting"""
+        try:
+            # Extract numeric value from the string (e.g., "10M" -> 10)
+            value_str = self.lazy_load_var.get()
+            if value_str.endswith('M'):
+                self.lazy_load_threshold = int(value_str[:-1])
+        except ValueError:
+            # If parsing fails, default to 10MB
+            self.lazy_load_threshold = 10
+            self.lazy_load_var.set("10M")
         
     def new_tab(self):
         """Create a new blank tab"""
@@ -1960,23 +2226,63 @@ class TableManager:
 
         # Prepare data for fuzzy search
         search_data = []
-        for row in tab.data:
-            # Check if we're searching all columns or specific columns
-            if search_column == "All Columns":
-                # Combine all row values into one string for searching
-                row_text = " ".join(str(cell) for cell in row).lower()
-                score = fuzz.partial_ratio(search_term, row_text)
-            else:
-                # Search only in the selected column
-                column_index = tab.headers.index(search_column)
-                if column_index < len(row):
-                    cell_value = str(row[column_index]).lower()
-                    score = fuzz.partial_ratio(search_term, cell_value)
+        
+        # In lazy load mode, data might not be fully loaded, so we need to read from file
+        if tab.is_large_file:
+            try:
+                with open(tab.filename, "r") as f:
+                    reader = csv.reader(f, delimiter="\t")
+                    # Skip header
+                    next(reader)
+                    
+                    # Search through all rows in the file
+                    for row in reader:
+                        if not row:  # Skip empty rows
+                            continue
+                            
+                        # Check if we're searching all columns or specific columns
+                        if search_column == "All Columns":
+                            # Combine all row values into one string for searching
+                            row_text = " ".join(str(cell) for cell in row).lower()
+                            score = fuzz.partial_ratio(search_term, row_text)
+                        else:
+                            # Search only in the selected column
+                            if search_column in tab.headers:
+                                column_index = tab.headers.index(search_column)
+                                if column_index < len(row):
+                                    cell_value = str(row[column_index]).lower()
+                                    score = fuzz.partial_ratio(search_term, cell_value)
+                                else:
+                                    score = 0
+                            else:
+                                score = 0
+                        
+                        if score >= threshold:
+                            search_data.append(row)
+            except Exception as e:
+                print(f"Error during search in lazy load mode: {str(e)}")
+        else:
+            # For normal mode, search in memory data
+            for row in tab.data:
+                # Check if we're searching all columns or specific columns
+                if search_column == "All Columns":
+                    # Combine all row values into one string for searching
+                    row_text = " ".join(str(cell) for cell in row).lower()
+                    score = fuzz.partial_ratio(search_term, row_text)
                 else:
-                    score = 0
+                    # Search only in the selected column
+                    if search_column in tab.headers:
+                        column_index = tab.headers.index(search_column)
+                        if column_index < len(row):
+                            cell_value = str(row[column_index]).lower()
+                            score = fuzz.partial_ratio(search_term, cell_value)
+                        else:
+                            score = 0
+                    else:
+                        score = 0
 
-            if score >= threshold:
-                search_data.append(row)
+                if score >= threshold:
+                    search_data.append(row)
 
         tab.populate_table(search_data)
         
@@ -2098,6 +2404,10 @@ class TableManager:
         # Make dashboard modal
         dashboard.transient(self.root)
         dashboard.grab_set()
+        
+        # Bind ESC and Ctrl+W to close the dashboard
+        dashboard.bind("<Escape>", lambda event: dashboard.destroy())
+        dashboard.bind("<Control-w>", lambda event: dashboard.destroy())
         
         # Add title label
         title_label = tk.Label(dashboard, text="Recent Files", font=('Arial', 14, 'bold'))
