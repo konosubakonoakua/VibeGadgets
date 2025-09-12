@@ -1,2 +1,2 @@
-# code-snippets
+# Gadgets by ***vibe coding***
 as the repo
