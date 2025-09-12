@@ -1,7 +1,10 @@
 import os
 import csv
 import json
+import os
 import tempfile
+import platform
+import subprocess
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -283,6 +286,7 @@ class FileTab:
         self.tree.bind("O", lambda event: self.add_row_above())
         self.tree.bind("a", lambda event: self.add_row())
         self.tree.bind("i", lambda event: self.edit_row(event))
+        self.tree.bind("e", lambda event: self.edit_row(event))  # e key to edit selected row
         self.tree.bind("<Return>", lambda event: self.edit_row(event))
         
         # Delete
@@ -301,11 +305,14 @@ class FileTab:
         self.tree.bind("/", lambda event: self.activate_search())
         self.tree.bind("f", lambda event: self.activate_search())
         
+        # Close tab when Ctrl+W is pressed while focus is on treeview
+        self.tree.bind("<Control-w>", lambda event: self.parent.close_tab())
+        
         # ESC key to cancel operations and refocus on tab
         self.tree.bind("<Escape>", lambda event: self.cancel_operation())
         
         # Prevent default behavior for these keys
-        for key in "hjklovaidVf" + "/":
+        for key in "hjklovaideVf" + "/":
             self.tree.bind(f"<Key-{key}>", lambda event: "break", add="+")
     
     def _handle_mouse_click(self, event):
@@ -539,8 +546,11 @@ class FileTab:
         
         self.parent.active_popups.append(edit_window)
         
-        # Bind ESC to close only this window
+        # Bind ESC and Ctrl+W to close only this window
         edit_window.bind("<Escape>", lambda event, popup=edit_window: self.parent._remove_popup(popup))
+        edit_window.bind("<Control-w>", lambda event, popup=edit_window: self.parent._remove_popup(popup))
+        # Bind Ctrl+Y to confirm
+        edit_window.bind("<Control-y>", lambda event: confirm_add())
         
         # Auto-focus the new window
         edit_window.focus_force()
@@ -598,8 +608,11 @@ class FileTab:
         
         self.parent.active_popups.append(edit_window)
         
-        # Bind ESC to close only this window
+        # Bind ESC and Ctrl+W to close only this window
         edit_window.bind("<Escape>", lambda event, popup=edit_window: self.parent._remove_popup(popup))
+        edit_window.bind("<Control-w>", lambda event, popup=edit_window: self.parent._remove_popup(popup))
+        # Bind Ctrl+Y to confirm
+        edit_window.bind("<Control-y>", lambda event: confirm_add())
         
         # Auto-focus the new window
         edit_window.focus_force()
@@ -694,8 +707,11 @@ class FileTab:
         
         self.parent.active_popups.append(edit_window)
         
-        # Bind ESC to close only this window
+        # Bind ESC and Ctrl+W to close only this window
         edit_window.bind("<Escape>", lambda event, popup=edit_window: self.parent._remove_popup(popup))
+        edit_window.bind("<Control-w>", lambda event, popup=edit_window: self.parent._remove_popup(popup))
+        # Bind Ctrl+Y to confirm
+        edit_window.bind("<Control-y>", lambda event: confirm_edit())
         
         edit_window.protocol("WM_DELETE_WINDOW", lambda: self.parent._remove_popup(edit_window))
         
@@ -844,8 +860,13 @@ class FileTab:
         tk.Button(buttons_frame, text="Yes", command=on_yes, width=10).pack(side=tk.RIGHT, padx=5)
         tk.Button(buttons_frame, text="No", command=on_no, width=10).pack(side=tk.RIGHT, padx=5)
         
-        # Bind ESC key to cancel
+        # Bind ESC and Ctrl+W to cancel
         confirm_window.bind("<Escape>", lambda event: on_no())
+        confirm_window.bind("<Control-w>", lambda event: on_no())
+        # Bind Ctrl+Y to confirm
+        confirm_window.bind("<Control-y>", lambda event: on_yes())
+        # Bind Ctrl+N to cancel
+        confirm_window.bind("<Control-n>", lambda event: on_no())
         
         # Focus on No button by default
         buttons_frame.after(100, lambda: buttons_frame.winfo_children()[0].focus())
@@ -1123,10 +1144,12 @@ class TableManager:
         self.root.geometry("1200x600")
 
         # Initialize data
-        self.backup_dir = "backups"
+        # Use system temp directory for backups
+        self.backup_dir = os.path.join(tempfile.gettempdir(), "laccs_tsv_editor_backups")
         self.tabs = []
         self.current_tab = None
         self.active_popups = []
+        self.backup_enabled = True  # Backup functionality toggle
         
         # History configuration
         # Use system temp directory for cross-platform compatibility
@@ -1227,17 +1250,47 @@ class TableManager:
         # Save shortcut (Ctrl+S)
         self.root.bind("<Control-s>", lambda event: self.save_data())
         
-        # Close tab shortcut (Ctrl+W)
-        self.root.bind("<Control-w>", lambda event: self.close_tab())
+        # Open file (Ctrl+O)
+        self.root.bind("<Control-o>", lambda event: self.open_file_dialog())
         
-        # Make sure these shortcuts work even when other widgets have focus
-        self.root.bind_all("<Control-s>", lambda event: self.save_data())
-        self.root.bind_all("<Control-w>", lambda event: self.close_tab())
+        # Open folder (Ctrl+Shift+O)
+        self.root.bind("<Control-O>", lambda event: self.open_folder_dialog())
+        
+        # Open restore interface (Ctrl+R)
+        self.root.bind("<Control-r>", lambda event: self.restore_backup())
+        
+        # Open backups folder (Ctrl+B)
+        self.root.bind("<Control-b>", lambda event: self.open_backup_folder())
+        
+        # Toggle auto backup (Ctrl+Shift+B)
+        self.root.bind("<Control-B>", lambda event: self.toggle_auto_backup())
+        
+        # Close current tab with Ctrl+W only when focus is not on any tab's treeview
+        def on_ctrl_w(event):
+            # Get the widget that currently has focus
+            focused_widget = event.widget
+            # Check if the focused widget is not a Treeview
+            if not isinstance(focused_widget, ttk.Treeview):
+                self.close_tab()
+        
+        self.root.bind("<Control-w>", on_ctrl_w)
 
     def backup_file(self, filename):
-        """Backup original file"""
+        """Backup original file if backup is enabled"""
+        # Check if backup is enabled
+        if not self.backup_enabled:
+            return
+
         if not filename:
             return
+
+        # Create backup directory if it doesn't exist
+        if not os.path.exists(self.backup_dir):
+            try:
+                os.makedirs(self.backup_dir)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to create backup directory: {str(e)}")
+                return
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_filename = os.path.join(
@@ -1250,6 +1303,172 @@ class TableManager:
                 backup.write(original.read())
         except Exception as e:
             messagebox.showerror("Error", f"Error backing up file: {str(e)}")
+
+    def open_backup_folder(self):
+        """Open the backup folder in the system file explorer"""
+        if not os.path.exists(self.backup_dir):
+            try:
+                os.makedirs(self.backup_dir)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to create backup directory: {str(e)}")
+                return
+        
+        try:
+            # Open folder using the appropriate method for the current OS
+            if platform.system() == "Windows":
+                os.startfile(self.backup_dir)
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.run(["open", self.backup_dir])
+            else:  # Linux and other Unix-like
+                subprocess.run(["xdg-open", self.backup_dir])
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open backup folder: {str(e)}")
+
+    def restore_backup(self):
+        """Restore a backup file for the current tab"""
+        if not self.current_tab or not self.current_tab.filename:
+            messagebox.showwarning("Warning", "No file opened in current tab")
+            return
+
+        # Create backup directory if it doesn't exist
+        if not os.path.exists(self.backup_dir):
+            messagebox.showinfo("Info", "No backup directory found. No backups available.")
+            return
+
+        # Get the base filename of the current file
+        current_filename = os.path.basename(self.current_tab.filename)
+        
+        # Find all backup files for this filename
+        backup_files = []
+        for file in os.listdir(self.backup_dir):
+            if file.startswith(f"{current_filename}.bak_"):
+                # Extract timestamp from filename
+                timestamp_str = file.replace(f"{current_filename}.bak_", "")
+                try:
+                    # Parse timestamp for sorting
+                    timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                    backup_files.append((file, timestamp))
+                except ValueError:
+                    # Skip files with invalid timestamp format
+                    continue
+
+        if not backup_files:
+            messagebox.showinfo("Info", f"No backups found for {current_filename}")
+            return
+
+        # Sort backups by timestamp (newest first)
+        backup_files.sort(key=lambda x: x[1], reverse=True)
+
+        # Create restore dialog
+        restore_window = tk.Toplevel(self.root)
+        restore_window.title(f"Restore Backup - {current_filename}")
+        restore_window.geometry("600x400")
+        restore_window.resizable(True, True)
+        restore_window.transient(self.root)
+        
+        # Center the window
+        restore_window.update_idletasks()
+        width = restore_window.winfo_width()
+        height = restore_window.winfo_height()
+        x = (restore_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (restore_window.winfo_screenheight() // 2) - (height // 2)
+        restore_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Add to active popups
+        self.active_popups.append(restore_window)
+        restore_window.protocol("WM_DELETE_WINDOW", lambda: self._remove_popup(restore_window))
+        
+        # Bind ESC and Ctrl+W to close
+        restore_window.bind("<Escape>", lambda event: self._remove_popup(restore_window))
+        restore_window.bind("<Control-w>", lambda event: self._remove_popup(restore_window))
+        # Bind Ctrl+Y to restore and Ctrl+N to cancel
+        restore_window.bind("<Control-y>", lambda event: on_restore())
+        restore_window.bind("<Control-n>", lambda event: self._remove_popup(restore_window))
+        
+        # Auto-focus the new window
+        restore_window.focus_force()
+
+        # Create a frame for scrolling
+        frame = tk.Frame(restore_window)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create a canvas and scrollbar
+        canvas = tk.Canvas(frame)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Create a frame inside the canvas
+        content_frame = tk.Frame(canvas)
+        canvas_frame = canvas.create_window((0, 0), window=content_frame, anchor="nw")
+
+        # Title
+        tk.Label(content_frame, text=f"Available Backups for {current_filename}", font=('Arial', 12, 'bold')).pack(pady=10)
+        
+        # Create listbox for backup selection
+        backup_listbox = tk.Listbox(content_frame, width=70, height=15, font=('Arial', 10))
+        backup_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # Populate listbox with backup files and their timestamps
+        backup_paths = []
+        for file, timestamp in backup_files:
+            display_text = f"{timestamp.strftime('%Y-%m-%d %H:%M:%S')} - {file}"
+            backup_listbox.insert(tk.END, display_text)
+            backup_paths.append(os.path.join(self.backup_dir, file))
+        
+        # Select the first item by default
+        if backup_listbox.size() > 0:
+            backup_listbox.selection_set(0)
+        
+        # Button frame
+        button_frame = tk.Frame(content_frame)
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        def on_restore():
+            selection = backup_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Warning", "Please select a backup to restore")
+                return
+            
+            # Confirm overwrite
+            if not messagebox.askyesno("Confirm Restore", "This will replace the current file with the selected backup. Continue?"):
+                return
+            
+            backup_path = backup_paths[selection[0]]
+            try:
+                # Create a backup of the current file before restoring
+                self.backup_file(self.current_tab.filename)
+                
+                # Read the backup file
+                with open(backup_path, "r") as f:
+                    reader = csv.reader(f, delimiter="\t")
+                    # First row is headers
+                    self.current_tab.headers = next(reader)
+                    # Read all remaining rows as data
+                    self.current_tab.data = [row for row in reader if row]  # Filter empty rows
+                
+                # Repopulate the table
+                self.current_tab.populate_table()
+                self.current_tab.modified = True
+                
+                messagebox.showinfo("Success", f"File restored from backup")
+                restore_window.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to restore backup: {str(e)}")
+        
+        # Buttons
+        tk.Button(button_frame, text="Restore", command=on_restore, width=15).pack(side=tk.RIGHT, padx=5)
+        tk.Button(button_frame, text="Cancel", command=restore_window.destroy, width=15).pack(side=tk.RIGHT, padx=5)
+        
+        # Update scroll region when content changes
+        def on_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(canvas_frame, width=event.width)
+        
+        content_frame.bind("<Configure>", on_configure)
+        canvas.bind("<Configure>", on_configure)
 
     def save_data(self):
         """Save data to file"""
@@ -1304,6 +1523,19 @@ class TableManager:
         help_window.geometry("600x600")
         help_window.resizable(True, True)
         
+        # Add to active popups
+        self.active_popups.append(help_window)
+        help_window.protocol("WM_DELETE_WINDOW", lambda: self._remove_popup(help_window))
+        
+        # Bind ESC and Ctrl+W to close
+        help_window.bind("<Escape>", lambda event: self._remove_popup(help_window))
+        help_window.bind("<Control-w>", lambda event: self._remove_popup(help_window))
+        # Bind Ctrl+N to cancel
+        help_window.bind("<Control-n>", lambda event: self._remove_popup(help_window))
+        
+        # Auto-focus the new window
+        help_window.focus_force()
+        
         # Create a frame for scrolling
         frame = tk.Frame(help_window)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -1341,12 +1573,12 @@ class TableManager:
         tk.Label(content_frame, text="\nEditing", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
         shortcuts = [
             ("i", "Edit current row"),
+            ("e", "Edit current row"),
             ("Enter", "Edit current row"),
             ("o", "Add new row below"),
             ("O", "Add new row above"),
             ("a", "Add new row below"),
-            ("d", "Delete selected rows"),
-            ("e", "Edit selected rows (in selection mode)")
+            ("d", "Delete selected rows")
         ]
         self._create_shortcut_table(content_frame, shortcuts)
         
@@ -1373,7 +1605,14 @@ class TableManager:
         tk.Label(content_frame, text="\nFile Operations", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
         shortcuts = [
             ("Ctrl+s", "Save current file"),
-            ("Ctrl+w", "Close current tab")
+            ("Ctrl+w", "Close current tab (only when focus is on tab)"),
+            ("Ctrl+o", "Open file"),
+            ("Ctrl+Shift+o", "Open folder"),
+            ("Ctrl+r", "Open restore interface"),
+            ("Ctrl+b", "Open backups folder"),
+            ("Ctrl+Shift+b", "Toggle auto backup"),
+            ("Restore Button", "Restore from backup"),
+            ("Open Backups Button", "Open backup folder")
         ]
         self._create_shortcut_table(content_frame, shortcuts)
         
@@ -1449,9 +1688,27 @@ class TableManager:
         tk.Button(file_buttons_frame, text="Save As", command=self.save_as_data).pack(
             side=tk.LEFT, padx=5
         )
+        tk.Button(file_buttons_frame, text="Restore", command=self.restore_backup).pack(
+            side=tk.LEFT, padx=5
+        )
+        tk.Button(file_buttons_frame, text="Open Backups", command=self.open_backup_folder).pack(
+            side=tk.LEFT, padx=5
+        )
         tk.Button(file_buttons_frame, text="Help", command=self.show_help).pack(
             side=tk.LEFT, padx=5
         )
+        
+        # Backup toggle switch
+        backup_toggle_frame = tk.Frame(button_frame)
+        backup_toggle_frame.pack(side=tk.LEFT, padx=5)
+        self.backup_var = tk.BooleanVar(value=self.backup_enabled)
+        backup_checkbox = tk.Checkbutton(
+            backup_toggle_frame,
+            text="Auto Backup",
+            variable=self.backup_var,
+            command=lambda: setattr(self, 'backup_enabled', self.backup_var.get())
+        )
+        backup_checkbox.pack(side=tk.LEFT)
 
 
         # Create notebook for tabs
@@ -1460,6 +1717,12 @@ class TableManager:
         
         # Bind tab change event
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        
+        # Bind double click on tab to close other tabs
+        self.notebook.bind("<Double-1>", self.on_tab_double_click)
+        
+        # Bind middle mouse button click on tab to close current tab
+        self.notebook.bind("<Button-2>", self.on_tab_middle_click)
         
     def new_tab(self):
         """Create a new blank tab"""
@@ -1473,6 +1736,94 @@ class TableManager:
         self.tabs.append(new_tab)
         self.current_tab = new_tab
         
+        self.update_title()
+        
+    def on_tab_double_click(self, event):
+        """Handle double click on tab to close other tabs"""
+        # Check if event is on a tab header
+        try:
+            # Get the clicked tab's index
+            x, y = event.x, event.y
+            tab_idx = self.notebook.index("@%d,%d" % (x, y))
+            if tab_idx is not None:
+                self.close_other_tabs(tab_idx)
+        except tk.TclError:
+            # Event not on a tab header, do nothing
+            pass
+            
+    def on_tab_middle_click(self, event):
+        """Handle middle mouse button click on tab to close current tab"""
+        # Check if event is on a tab header
+        try:
+            # Get the clicked tab's index
+            x, y = event.x, event.y
+            tab_idx = self.notebook.index("@%d,%d" % (x, y))
+            if tab_idx is not None and 0 <= tab_idx < len(self.tabs):
+                # Save the current tab index
+                current_idx = self.notebook.index(self.notebook.select())
+                
+                # If the clicked tab is the current tab, just close it
+                if tab_idx == current_idx:
+                    self.close_tab()
+                else:
+                    # If the clicked tab is not the current tab, select it first then close it
+                    self.notebook.select(self.tabs[tab_idx].tab_frame)
+                    self.current_tab = self.tabs[tab_idx]
+                    self.close_tab()
+        except tk.TclError:
+            # Event not on a tab header, do nothing
+            pass
+            
+    def close_other_tabs(self, keep_index):
+        """Close all tabs except the one at the given index"""
+        if len(self.tabs) <= 1:
+            return
+            
+        # Check if there are unsaved changes in any tab
+        unsaved_tabs = [i for i, tab in enumerate(self.tabs) if i != keep_index and tab.modified]
+        
+        if unsaved_tabs:
+            response = messagebox.askyesnocancel(
+                "Save Changes", 
+                "There are unsaved changes in other tabs. Do you want to save before closing?"
+            )
+            if response is None:  # Cancel
+                return
+            if response:  # Yes
+                for i in unsaved_tabs:
+                    if self.tabs[i].filename:
+                        # Temporarily set current_tab to save
+                        old_current = self.current_tab
+                        self.current_tab = self.tabs[i]
+                        self.save_data()
+                        self.current_tab = old_current
+                    else:
+                        # File has no name, can't save
+                        if not messagebox.askyesno(
+                            "Save As",
+                            f"File '{self.tabs[i].tab_name}' has no name. Would you like to save it?"
+                        ):
+                            # User chose not to save, proceed with closing
+                            pass
+                        else:
+                            # Temporarily set current_tab to save as
+                            old_current = self.current_tab
+                            self.current_tab = self.tabs[i]
+                            if not self.save_as_data():
+                                # Save as cancelled, abort closing other tabs
+                                self.current_tab = old_current
+                                return
+                            self.current_tab = old_current
+        
+        # Close all tabs except the one to keep
+        tabs_to_close = [i for i in range(len(self.tabs)) if i != keep_index]
+        # Close from last to first to avoid index issues
+        for i in reversed(tabs_to_close):
+            self.notebook.forget(self.tabs[i].tab_frame)
+            del self.tabs[i]
+        
+        # Update current tab
+        self.current_tab = self.tabs[0]
         self.update_title()
         
     def open_folder_dialog(self, dashboard=None):
@@ -1675,6 +2026,13 @@ class TableManager:
                 # If no current tab, focus main window
                 self.root.focus_force()
             
+    def toggle_auto_backup(self):
+        """Toggle auto backup functionality"""
+        self.backup_enabled = not self.backup_enabled
+        self.backup_var.set(self.backup_enabled)
+        status = "enabled" if self.backup_enabled else "disabled"
+        messagebox.showinfo("Auto Backup", f"Auto backup has been {status}")
+        
     def load_recent_files(self):
         """Load recently opened files from configuration with deduplication"""
         if os.path.exists(self.recent_files_path):
