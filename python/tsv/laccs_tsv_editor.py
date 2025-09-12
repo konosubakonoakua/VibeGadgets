@@ -1481,10 +1481,10 @@ class TableManager:
         """Update window title with current filename"""
         if self.current_tab and self.current_tab.filename:
             self.root.title(
-                f"LACCS Edge Nodes Manager - {os.path.basename(self.current_tab.filename)}"
+                f"LACCS TSV Manager - {os.path.basename(self.current_tab.filename)}"
             )
         else:
-            self.root.title("LACCS Edge Nodes Manager - No file selected")
+            self.root.title("LACCS TSV Manager - No file selected")
 
     def load_data(self):
         """Load data file - This is now called from the FileTab class"""
