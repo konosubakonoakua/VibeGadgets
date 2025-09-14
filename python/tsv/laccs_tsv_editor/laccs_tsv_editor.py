@@ -1519,6 +1519,26 @@ class TableManager:
                 self.close_tab()
         
         self.root.bind("<Control-w>", on_ctrl_w)
+        
+        # Tab navigation - Ctrl+Tab to next tab, Ctrl+Shift+Tab to previous tab
+        def on_next_tab(event):
+            if len(self.tabs) <= 1:
+                return
+            current_index = self.notebook.index(self.notebook.select())
+            next_index = (current_index + 1) % len(self.tabs)
+            self.notebook.select(self.tabs[next_index].tab_frame)
+            return "break"  # Prevent default behavior
+        
+        def on_prev_tab(event):
+            if len(self.tabs) <= 1:
+                return
+            current_index = self.notebook.index(self.notebook.select())
+            prev_index = (current_index - 1) % len(self.tabs)
+            self.notebook.select(self.tabs[prev_index].tab_frame)
+            return "break"  # Prevent default behavior
+        
+        self.root.bind("<Control-Tab>", on_next_tab)
+        self.root.bind("<Control-Shift-Tab>", on_prev_tab)
 
     def backup_file(self, filename):
         """Backup original file if backup is enabled"""
@@ -1809,6 +1829,8 @@ class TableManager:
             ("l", "Scroll right"),
             ("Ctrl+u", "Page up"),
             ("Ctrl+d", "Page down"),
+            ("Ctrl+Tab", "Switch to next tab"),
+            ("Ctrl+Shift+Tab", "Switch to previous tab"),
             ("i", "Jump to selection start (in selection mode)"),
             ("o", "Jump to selection end (in selection mode)")
         ]
