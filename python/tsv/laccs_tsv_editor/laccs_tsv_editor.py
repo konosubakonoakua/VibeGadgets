@@ -1781,11 +1781,11 @@ class TableManager:
             self.add_to_recent_files(file_path)
 
     def show_help(self):
-        """Show help dialog with keyboard shortcuts"""
+        """Show help dialog with application information and keyboard shortcuts"""
         # Create help window
         help_window = tk.Toplevel(self.root)
-        help_window.title("Keyboard Shortcuts")
-        help_window.geometry("600x600")
+        help_window.title("LACCS TSV Editor - Help")
+        help_window.geometry("800x700")
         help_window.resizable(True, True)
         
         # Add to active popups
@@ -1817,12 +1817,38 @@ class TableManager:
         content_frame = tk.Frame(canvas)
         canvas_frame = canvas.create_window((0, 0), window=content_frame, anchor="nw")
         
+        # Header section with application description
+        header_frame = tk.Frame(content_frame, pady=10, bd=2, relief=tk.RAISED)
+        header_frame.pack(fill=tk.X, padx=20, pady=10)
+        
         # Title
-        tk.Label(content_frame, text="Keyboard Shortcuts", font=('Arial', 14, 'bold')).pack(pady=10)
+        tk.Label(header_frame, text="LACCS TSV Editor", font=('Arial', 16, 'bold')).pack(pady=5)
+        
+        # Application description
+        desc_text = ("A powerful editor for TSV and CSV files with advanced features for data manipulation, "
+                     "including multiple tab support, backup management, and efficient keyboard navigation.")
+        tk.Label(header_frame, text=desc_text, wraplength=600, justify=tk.LEFT, font=('Arial', 10)).pack(pady=5, padx=20)
+        
+        # Features overview
+        tk.Label(content_frame, text="Features Overview", font=('Arial', 14, 'bold')).pack(pady=10)
+        features_frame = tk.Frame(content_frame)
+        features_frame.pack(fill=tk.X, padx=30, pady=5)
+        
+        features = [
+            "• Multi-tab interface for working with multiple files simultaneously",
+            "• Advanced keyboard navigation and editing shortcuts",
+            "• Auto-backup functionality to prevent data loss",
+            "• Search and selection tools for efficient data management",
+            "• Recent files history for quick access to frequently used files"
+        ]
+        for feature in features:
+            tk.Label(features_frame, text=feature, anchor="w", justify=tk.LEFT, font=('Arial', 10)).pack(anchor="w", pady=2)
+        
+        # Keyboard shortcuts section with improved styling
+        tk.Label(content_frame, text="Keyboard Shortcuts", font=('Arial', 14, 'bold')).pack(pady=15)
         
         # Navigation shortcuts
-        tk.Label(content_frame, text="Navigation", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
-        shortcuts = [
+        self._create_shortcut_section(content_frame, "Navigation", [
             ("h", "Scroll left"),
             ("j", "Move down"),
             ("k", "Move up"),
@@ -1833,12 +1859,10 @@ class TableManager:
             ("Ctrl+Shift+Tab", "Switch to previous tab"),
             ("i", "Jump to selection start (in selection mode)"),
             ("o", "Jump to selection end (in selection mode)")
-        ]
-        self._create_shortcut_table(content_frame, shortcuts)
+        ])
         
         # Editing shortcuts
-        tk.Label(content_frame, text="\nEditing", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
-        shortcuts = [
+        self._create_shortcut_section(content_frame, "Editing", [
             ("i", "Edit current row"),
             ("e", "Edit current row"),
             ("Enter", "Edit current row"),
@@ -1846,49 +1870,53 @@ class TableManager:
             ("O", "Add new row above"),
             ("a", "Add new row below"),
             ("d", "Delete selected rows")
-        ]
-        self._create_shortcut_table(content_frame, shortcuts)
+        ])
         
         # Selection shortcuts
-        tk.Label(content_frame, text="\nSelection", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
-        shortcuts = [
+        self._create_shortcut_section(content_frame, "Selection", [
             ("v", "Toggle selection mode"),
             ("V", "Toggle selection mode"),
             ("Ctrl+click", "Toggle item in selection"),
             ("j/k", "Navigate with selection (in selection mode)")
-        ]
-        self._create_shortcut_table(content_frame, shortcuts)
+        ])
         
         # Search shortcuts
-        tk.Label(content_frame, text="\nSearch", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
-        shortcuts = [
+        self._create_shortcut_section(content_frame, "Search", [
             ("f", "Activate search"),
             ("/", "Activate search"),
             ("Ctrl+f", "Activate search")
-        ]
-        self._create_shortcut_table(content_frame, shortcuts)
+        ])
         
         # File operations
-        tk.Label(content_frame, text="\nFile Operations", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
-        shortcuts = [
+        self._create_shortcut_section(content_frame, "File Operations", [
             ("Ctrl+s", "Save current file"),
             ("Ctrl+w", "Close current tab (only when focus is on tab)"),
             ("Ctrl+o", "Open file"),
             ("Ctrl+Shift+o", "Open folder"),
             ("Ctrl+r", "Open restore interface"),
             ("Ctrl+b", "Open backups folder"),
-            ("Ctrl+Shift+b", "Toggle auto backup"),
-            ("Restore Button", "Restore from backup"),
-            ("Open Backups Button", "Open backup folder")
-        ]
-        self._create_shortcut_table(content_frame, shortcuts)
+            ("Ctrl+Shift+b", "Toggle auto backup")
+        ])
         
         # General shortcuts
-        tk.Label(content_frame, text="\nGeneral", font=('Arial', 12, 'bold')).pack(anchor="w", pady=5)
-        shortcuts = [
+        self._create_shortcut_section(content_frame, "General", [
             ("ESC", "Cancel operation / Exit selection mode / Close popup")
+        ])
+        
+        # Usage tips section
+        tk.Label(content_frame, text="Usage Tips", font=('Arial', 14, 'bold')).pack(pady=15)
+        tips_frame = tk.Frame(content_frame, bd=1, relief=tk.SUNKEN, bg="#f0f0f0")
+        tips_frame.pack(fill=tk.X, padx=30, pady=5)
+        
+        tips = [
+            "• Use the j/k keys for efficient row navigation (vim-style)",
+            "• Enable auto-backup to prevent data loss while editing important files",
+            "• Press 'v' to enter selection mode and use j/k to select multiple rows",
+            "• Use Ctrl+Tab to quickly switch between multiple open files"
         ]
-        self._create_shortcut_table(content_frame, shortcuts)
+        for tip in tips:
+            tk.Label(tips_frame, text=tip, anchor="w", justify=tk.LEFT, font=('Arial', 10), 
+                     bg="#f0f0f0", padx=10, pady=3).pack(anchor="w", fill=tk.X)
         
         # Update scroll region when content changes
         def on_configure(event):
@@ -1898,8 +1926,11 @@ class TableManager:
         content_frame.bind("<Configure>", on_configure)
         canvas.bind("<Configure>", on_configure)
         
-        # Add close button
-        tk.Button(help_window, text="Close", command=help_window.destroy).pack(pady=10)
+        # Add close button with better styling
+        button_frame = tk.Frame(help_window, pady=10)
+        button_frame.pack(fill=tk.X)
+        tk.Button(button_frame, text="Close", command=help_window.destroy, 
+                  width=20, font=('Arial', 10), bg="#f0f0f0").pack(pady=5)
         
         # Center the window
         help_window.update_idletasks()
@@ -1908,6 +1939,17 @@ class TableManager:
         x = (help_window.winfo_screenwidth() // 2) - (width // 2)
         y = (help_window.winfo_screenheight() // 2) - (height // 2)
         help_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+    def _create_shortcut_section(self, parent, title, shortcuts):
+        """Create a styled section with shortcuts"""
+        section_frame = tk.Frame(parent, bd=1, relief=tk.GROOVE, pady=5)
+        section_frame.pack(fill=tk.X, padx=30, pady=8)
+        
+        # Section title
+        tk.Label(section_frame, text=title, font=('Arial', 12, 'bold')).pack(anchor="w", pady=5, padx=10)
+        
+        # Create shortcuts table
+        self._create_shortcut_table(section_frame, shortcuts)
         
     def _create_shortcut_table(self, parent, shortcuts):
         """Create a table of shortcuts and their descriptions"""
