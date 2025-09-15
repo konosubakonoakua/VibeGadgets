@@ -350,10 +350,13 @@ class FileTab:
         self.selected_items = set()
         
         # Bind double-click for editing
-        self.tree.bind("<Double-1>", lambda event: self.parent.edit_row(self, event))
+        self.tree.bind("<Double-1>", lambda event: self.parent.edit_row(self, event, True))
         
         # Bind left click with Ctrl for multiple selection in normal mode
         self.tree.bind("<Button-1>", self._handle_mouse_click)
+        
+        # Bind right click for context menu
+        self.tree.bind("<Button-3>", self._show_context_menu)
         
         # Bind Vim-style keyboard shortcuts
         self.bind_vim_shortcuts()
@@ -381,9 +384,136 @@ class FileTab:
         style.configure("OddRow.Treeitem", background="#ffffff")
         style.configure("EvenRow.Treeitem", background="#f0f0f0")
         style.configure("CurrentRow.Treeitem", background="#ffcc00", foreground="#000000")
-        # 添加选择模式专用样式
+        # Add selection mode specific styles
         style.configure("SelectionRangeEnd.Treeitem", background="#9933ff", foreground="#ffffff")
         style.configure("SelectionRangeMiddle.Treeitem", background="#33cc33", foreground="#ffffff")
+        
+    def _show_context_menu(self, event):
+        """Show context menu on right click"""
+        # Identify the row under the mouse
+        item = self.tree.identify_row(event.y)
+        
+        # If we clicked on a row
+        if item:
+            # If not in selection mode and clicking on a different item, select it
+            if not self.selection_mode and item != self.tree.focus():
+                self.tree.selection_set(item)
+                self.tree.focus(item)
+                self.selected_items = set([item])
+                
+            print(f"Right click on item: {item}, selected_items: {self.selected_items}")
+                
+            # Create context menu
+            context_menu = tk.Menu(self.tab_frame, tearoff=0)
+            
+            # Add menu items with wrappers to ensure they get called
+            context_menu.add_command(label="Copy", command=lambda: self._copy_rows())
+            context_menu.add_command(label="Cut", command=lambda: self._cut_rows())
+            
+            # Add Paste option if clipboard has data
+            print(f"Clipboard status: {bool(self.parent.clipboard)}")
+            if self.parent.clipboard:
+                context_menu.add_command(label="Paste", command=lambda: self._paste_rows())
+            else:
+                context_menu.add_command(label="Paste", state=tk.DISABLED)
+            
+            context_menu.add_separator()
+            context_menu.add_command(label="Delete", command=self.delete_row)
+            
+            # Display the menu at the current mouse position
+            try:
+                context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                # Make sure to destroy the menu when done
+                context_menu.grab_release()
+                
+    def _copy_rows(self):
+        """Copy selected rows to clipboard"""
+        selected_items = self.get_selected_items()
+        if not selected_items:
+            return
+            
+        # Get the data for selected rows
+        self.parent.clipboard = []
+        
+        # Get all current items in the treeview
+        current_items = set(self.tree.get_children())
+        
+        for item in selected_items:
+            # Check if item still exists in the treeview
+            if item in current_items:
+                try:
+                    row_index = self.tree.index(item)
+                    self.parent.clipboard.append(self.data[row_index].copy())
+                except Exception as e:
+                    print(f"Error copying row {item}: {e}")
+        
+        self.parent.clipboard_is_cut = False
+        
+    def _cut_rows(self):
+        """Cut selected rows to clipboard"""
+        selected_items = self.get_selected_items()
+        if not selected_items:
+            return
+            
+        # Copy data to clipboard first
+        self._copy_rows()
+        self.parent.clipboard_is_cut = True
+        
+        # Get all current items in the treeview
+        current_items = set(self.tree.get_children())
+        
+        # Mark cut rows with a visual indicator (optional)
+        for item in selected_items:
+            # Check if item still exists in the treeview
+            if item in current_items:
+                try:
+                    tags = list(self.tree.item(item, "tags")) if self.tree.item(item, "tags") else []
+                    if "CutRow" not in tags:
+                        tags.append("CutRow")
+                    self.tree.item(item, tags=tags)
+                except Exception as e:
+                    print(f"Error marking row {item} as cut: {e}")
+            
+        # Configure cut row style
+        self.tree.tag_configure("CutRow", background="#ffcccc")
+        
+    def _paste_rows(self):
+        """Paste rows from clipboard"""
+        if not self.parent.clipboard:
+            return
+            
+        # Get the current focused item to determine where to paste
+        focused_item = self.tree.focus()
+        if focused_item:
+            # Paste after the focused item
+            insert_index = self.tree.index(focused_item) + 1
+        else:
+            # If no focused item, paste at the end
+            insert_index = len(self.data)
+            
+        # Insert the clipboard data
+        for row in self.parent.clipboard:
+            self.data.insert(insert_index, row.copy())
+            insert_index += 1
+            
+        # If we pasted cut rows, clear the cut visual indicators
+        if self.parent.clipboard_is_cut:
+            self.parent.clipboard = []
+            self.parent.clipboard_is_cut = False
+            
+            # Re-populate the table to clear cut indicators
+            self.populate_table()
+        else:
+            # Just refresh the table to show new rows
+            self.populate_table()
+            
+        self.modified = True
+        
+        # If in selection mode, clear selections
+        if self.selection_mode:
+            self.selected_items.clear()
+            self.clear_current_row_style()
         
     def bind_vim_shortcuts(self):
         """Bind Vim-style keyboard shortcuts to the treeview"""
@@ -472,6 +602,20 @@ class FileTab:
             
             # Prevent default selection behavior
             return "break"
+        
+        # In normal mode (not selection mode and not Ctrl+click):
+        # Update selected_items with the clicked item
+        else:
+            # Clear previous selections
+            self.selected_items.clear()
+            # Add the clicked item to selection
+            self.selected_items.add(item)
+            # Select the item in the treeview
+            self.tree.selection_set(item)
+            print(f"Mouse click: selected {item} in normal mode")
+            
+            # Update the current row style
+            self.update_current_row_style(item)
             
     def scroll_left(self):
         """Scroll horizontally to the left"""
@@ -768,7 +912,7 @@ class FileTab:
             row=len(self.headers), column=1, pady=5
         )
         
-    def edit_row(self, event=None):
+    def edit_row(self, event=None, edit_cell=False):
         """Edit row(s) in this tab, open separate window for each selected item"""
         # Debug: Print current selection status
         print(f"Edit row called with selection_mode={self.selection_mode}")
@@ -794,9 +938,9 @@ class FileTab:
         print(f"Creating {len(selected_items)} edit windows")
         for i, item_id in enumerate(selected_items):
             print(f"Creating edit window for item {i}: {item_id}")
-            self._create_edit_window_for_item(item_id, i)
+            self._create_edit_window_for_item(item_id, i, edit_cell, event)
     
-    def _create_edit_window_for_item(self, item_id, window_offset=0):
+    def _create_edit_window_for_item(self, item_id, window_offset=0, edit_cell=False, event=None):
         """Create an edit window for a specific item"""
         # Get row data and save row index immediately
         item_data = self.tree.item(item_id)["values"]
@@ -805,9 +949,27 @@ class FileTab:
         # Get item name or identifier for window title
         item_name = item_data[0] if item_data else f"Item {row_index}"
         
+        # Check if we should edit a single cell or the entire row
+        column_index = None
+        window_title = f"Edit Node: {item_name}"
+        if edit_cell and event:
+            # Get the clicked column
+            region = self.tree.identify_region(event.x, event.y)
+            if region == "cell":
+                column = self.tree.identify_column(event.x)
+                # Convert column identifier to index (e.g., "#1" -> 0)
+                column_index = int(column[1:]) - 1
+                # Skip row number column
+                if column_index > 0:
+                    # Adjust for row number column
+                    column_index -= 1
+                    window_title = f"Edit: {self.headers[column_index]}"
+                else:
+                    column_index = None
+        
         # Create edit window
         edit_window = tk.Toplevel(self.parent.root)
-        edit_window.title(f"Edit Node: {item_name}")
+        edit_window.title(window_title)
         
         # Position the window next to the main window with offset for multiple windows
         root_x = self.parent.root.winfo_x()
@@ -832,19 +994,40 @@ class FileTab:
 
         # Create input fields
         entries = {}
-        for i, header in enumerate(self.headers):
+        if edit_cell and column_index is not None:
+            # Edit only the clicked column
+            header = self.headers[column_index]
             tk.Label(edit_window, text=header).grid(
-                row=i, column=0, padx=5, pady=2, sticky=tk.E
+                row=0, column=0, padx=5, pady=2, sticky=tk.E
             )
             entry = tk.Entry(edit_window, width=40)
-            entry.insert(0, item_data[i])
-            entry.grid(row=i, column=1, padx=5, pady=2)
+            entry.insert(0, item_data[column_index])
+            entry.grid(row=0, column=1, padx=5, pady=2)
+            # Focus and select all text in the entry
+            entry.focus_set()
+            entry.select_range(0, tk.END)
             entries[header] = entry
+            edit_window.geometry("400x100")
+        else:
+            # Edit entire row
+            for i, header in enumerate(self.headers):
+                tk.Label(edit_window, text=header).grid(
+                    row=i, column=0, padx=5, pady=2, sticky=tk.E
+                )
+                entry = tk.Entry(edit_window, width=40)
+                entry.insert(0, item_data[i])
+                entry.grid(row=i, column=1, padx=5, pady=2)
+                entries[header] = entry
 
         # Confirm button
         def confirm_edit():
-            # Update data for this specific row
-            self.data[row_index] = [entries[header].get() for header in self.headers]
+            # Update data
+            if edit_cell and column_index is not None:
+                # Update only the edited cell
+                self.data[row_index][column_index] = entries[self.headers[column_index]].get()
+            else:
+                # Update entire row
+                self.data[row_index] = [entries[header].get() for header in self.headers]
             self.populate_table()
             self.modified = True
             self.parent._remove_popup(edit_window)
@@ -1022,8 +1205,12 @@ class FileTab:
             self.populate_table()
 
     def get_selected_items(self):
-        """Get the list of currently selected items"""
-        return list(self.selected_items)
+        """Get the list of currently selected items that still exist in the treeview"""
+        # Get all current items in the treeview
+        current_items = set(self.tree.get_children())
+        
+        # Return only the items that still exist
+        return [item for item in self.selected_items if item in current_items]
 
     def is_full_document_selected(self):
         """Check if all items in the document are selected"""
@@ -1031,14 +1218,12 @@ class FileTab:
         return len(self.selected_items) == len(all_items)
         
     def update_current_row_style(self, current_item):
-        # 清除所有特殊样式标签
         for item in self.tree.get_children():
             tags = self.tree.item(item, "tags")
             if tags:
                 new_tags = [tag for tag in tags if tag not in ["SelectionRangeEnd", "SelectionRangeMiddle"]]
                 self.tree.item(item, tags=new_tags)
                 
-        # 清除并重新设置当前行样式
         self.clear_current_row_style()
         
         if current_item:
@@ -1048,25 +1233,20 @@ class FileTab:
                 new_tags.append("CurrentRow")
             self.tree.item(current_item, tags=new_tags)
         
-        # 在选择模式下应用特殊样式
         if self.selection_mode:
             selected_items = self.selected_items
             if selected_items:
-                # 获取所有项目和选中项目的索引
                 all_items = self.tree.get_children()
                 item_to_index = {item: idx for idx, item in enumerate(all_items)}
                 selected_indices = [item_to_index[item] for item in selected_items]
                 selected_indices.sort()
                 
-                # 为选中的项目应用样式
                 for item in selected_items:
                     item_idx = item_to_index[item]
                     tags = list(self.tree.item(item, "tags")) if self.tree.item(item, "tags") else []
                     
-                    # 首尾项使用紫色样式（如果是首尾项或当前项）
                     if (item_idx == selected_indices[0] or item_idx == selected_indices[-1] or item == current_item):
                         tags.append("SelectionRangeEnd")
-                    # 中间选择项使用绿色样式
                     else:
                         tags.append("SelectionRangeMiddle")
                     
@@ -1362,10 +1542,10 @@ class FileTab:
             return
             
         if self.sort_column == col:
-            self.sort_direction = not self.sort_direction  # 切换排序方向
+            self.sort_direction = not self.sort_direction
         else:
             self.sort_column = col
-            self.sort_direction = True  # 默认升序
+            self.sort_direction = True
             
         col_index = self.headers.index(col)
         
@@ -1395,6 +1575,10 @@ class TableManager:
         self.active_popups = []
         self.backup_enabled = True  # Backup functionality toggle
         self.lazy_load_threshold = 10  # Default 10MB threshold for lazy loading
+        
+        # Clipboard functionality
+        self.clipboard = []  # Store copied/cut rows
+        self.clipboard_is_cut = False  # Track if clipboard data was cut
         
         # History configuration
         # Use system temp directory for cross-platform compatibility
@@ -1718,7 +1902,7 @@ class TableManager:
                 self.current_tab.populate_table()
                 self.current_tab.modified = True
                 
-                messagebox.showinfo("Success", f"File restored from backup")
+                messagebox.showinfo("Success", "File restored from backup")
                 restore_window.destroy()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to restore backup: {str(e)}")
@@ -2256,10 +2440,10 @@ class TableManager:
             
         self.current_tab.add_row()
 
-    def edit_row(self, tab, event):
+    def edit_row(self, tab, event, edit_cell=False):
         """Delegate to tab's edit_row method"""
         if tab:
-            tab.edit_row(event)
+            tab.edit_row(event, edit_cell)
 
     def delete_row(self):
         """Delegate to current tab's delete_row method"""
