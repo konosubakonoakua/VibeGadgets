@@ -522,6 +522,8 @@ class FileTab:
         self.tree.bind("j", lambda event: self.move_down())
         self.tree.bind("k", lambda event: self.move_up())
         self.tree.bind("l", lambda event: self.scroll_right())
+        self.tree.bind("gg", lambda event: self.go_to_top())
+        self.tree.bind("G", lambda event: self.go_to_bottom())
         
         # Editing and file operations
         self.tree.bind("o", lambda event: self.add_row())
@@ -554,8 +556,30 @@ class FileTab:
         self.tree.bind("<Escape>", lambda event: self.cancel_operation())
         
         # Prevent default behavior for these keys
-        for key in "hjklovaideVf" + "/":
+        for key in "hjklovaideVfG" + "/":
             self.tree.bind(f"<Key-{key}>", lambda event: "break", add="+")
+    
+    def go_to_top(self):
+        """Go to the first row of the table"""
+        items = self.tree.get_children()
+        if items:
+            first_item = items[0]
+            self.tree.selection_set(first_item)
+            self.tree.focus(first_item)
+            self.tree.see(first_item)
+            if self.selection_mode:
+                self.update_current_row_style(first_item)
+    
+    def go_to_bottom(self):
+        """Go to the last row of the table"""
+        items = self.tree.get_children()
+        if items:
+            last_item = items[-1]
+            self.tree.selection_set(last_item)
+            self.tree.focus(last_item)
+            self.tree.see(last_item)
+            if self.selection_mode:
+                self.update_current_row_style(last_item)
     
     def _handle_mouse_click(self, event):
         """Handle mouse click events, entering selection mode with Ctrl+click and managing selection state"""
