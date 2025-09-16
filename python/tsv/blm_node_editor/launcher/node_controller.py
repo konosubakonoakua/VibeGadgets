@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk, filedialog
 import threading
 import time
 import datetime
@@ -44,9 +44,6 @@ class NodeController:
         # Bind log filter event
         self.view.log_filter_var.trace("w", self.filter_log_entries)
 
-        # Add save button to the view
-        self._add_save_button()
-
         # Bind Ctrl+S shortcut for saving
         self.root.bind("<Control-s>", self.save_changes)
         self.root.bind("<Control-S>", self.save_changes)
@@ -67,6 +64,8 @@ class NodeController:
         self.view.delete_tsv_item_callback = self.delete_tsv_item
         self.view.launch_bdblm_callback = self.launch_bdblm
         self.view.connect_via_putty_callback = self.connect_via_putty
+        self.view.open_filedb_callback = self.open_filedb
+        self.view.save_changes_callback = self.save_changes
 
         # Bind authentication apply button
         self.view.apply_auth_button.config(command=self.apply_authentication)
@@ -83,6 +82,32 @@ class NodeController:
                             btn.config(command=self.clear_log)
                         elif btn["text"] == "Refresh Status":
                             btn.config(command=self.force_refresh_status)
+
+    def open_filedb(self):
+        """Allow user to select a new NODES.tsv file and reload data"""
+        # Ask user if they want to save current changes
+        if self.has_unsaved_changes:
+            if messagebox.askyesnocancel(
+                "Save Changes",
+                "You have unsaved changes. Would you like to save them before opening a new file?",
+            ):
+                if not self.save_changes():
+                    return  # User canceled save operation
+            elif messagebox.NO == messagebox.askyesnocancel(
+                "Discard Changes", "Would you like to discard your unsaved changes?"
+            ):
+                return  # User decided not to discard changes
+
+        # Allow user to select external file, passing the main window as parent
+        success_select, select_message = self.model.select_external_nodes_file(
+            parent=self.root
+        )
+        if success_select:
+            self.log_message(select_message)
+            # Try to load data again with the selected file
+            self.load_data()
+        else:
+            self.log_message(select_message)
 
     def launch_bdblm(self):
         """Launch BDBLM.exe with parameters from the selected node"""
@@ -122,11 +147,42 @@ class NodeController:
             self.log_message(f"ERROR: Failed to launch BDBLM.exe: {str(e)}")
 
     def load_data(self):
-        success, message = self.model.load_node_data()
+        success, message = self.model.load_node_data(parent=self.root)
         if not success:
-            messagebox.showerror("Error", message)
-            self.log_message(f"ERROR: {message}")
-            return
+            # If file not found, ask user to select external file
+            if (
+                "no such file" in message.lower()
+                or "not found" in message.lower()
+                or "errno 2" in message.lower()
+            ):
+                self.log_message(f"ERROR: {message}")
+                # Ask user if they want to select an external file
+                if messagebox.askyesno(
+                    "File Not Found",
+                    f"Could not find {self.model.tsv_file}\n"
+                    "Would you like to select a different NODES.tsv file?",
+                ):
+                    # Allow user to select external file, passing the main window as parent
+                    success_select, select_message = (
+                        self.model.select_external_nodes_file(parent=self.root)
+                    )
+                    if success_select:
+                        self.log_message(select_message)
+                        # Try to load data again with the selected file
+                        success_retry, retry_message = self.model.load_node_data(
+                            parent=self.root
+                        )
+                        if not success_retry:
+                            messagebox.showerror("Error", retry_message)
+                            self.log_message(f"ERROR: {retry_message}")
+                            return
+                    else:
+                        self.log_message(select_message)
+                        return
+            else:
+                messagebox.showerror("Error", message)
+                self.log_message(f"ERROR: {message}")
+                return
 
         self.view.tree["columns"] = self.model.headers
         for col in self.model.headers:
@@ -189,19 +245,21 @@ class NodeController:
 
     def _add_save_button(self):
         """Add a save button to the view"""
-        # Find the appropriate parent widget to add the save button
-        # This might need adjustment based on the actual view structure
-        button_frame = ttk.Frame(self.view.root)
-        button_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
+        # Create button frame inside main_frame to avoid layout conflicts
+        button_frame = ttk.Frame(self.view.main_frame)
+        button_frame.grid(
+            row=1, column=0, sticky="ew", padx=10, pady=(5, 0), columnspan=2
+        )
+        button_frame.grid_columnconfigure(0, weight=1)
+
+        # Add a label to indicate unsaved changes
+        self.unsaved_label = ttk.Label(button_frame, text="", foreground="red")
+        self.unsaved_label.grid(row=0, column=0, sticky="e", padx=5)
 
         save_button = ttk.Button(
             button_frame, text="Save Changes", command=self.save_changes
         )
-        save_button.pack(side=tk.RIGHT, padx=5)
-
-        # Add a label to indicate unsaved changes
-        self.unsaved_label = ttk.Label(button_frame, text="", foreground="red")
-        self.unsaved_label.pack(side=tk.RIGHT, padx=5)
+        save_button.grid(row=0, column=1, sticky="e", padx=5)
 
     def set_unsaved_changes(self, has_changes=True):
         """Set the unsaved changes flag and update the UI"""
@@ -503,7 +561,7 @@ class NodeController:
         stop_result = self.execute_ssh_command(ip, stop_command)
 
         if stop_result == "success":
-            self.log_message(f"Waiting for service to stop...")
+            self.log_message("Waiting for service to stop...")
             time.sleep(1)  # Wait for the service to stop
             start_result = self.execute_ssh_command(ip, start_command)
 
@@ -881,7 +939,9 @@ class NodeController:
         username, password = self.model.get_node_credentials(node_name)
 
         # Create a temporary directory to store files
-        import os, tempfile, csv
+        import os
+        import tempfile
+        import csv
 
         temp_dir = os.path.join(tempfile.gettempdir(), f"nodes_tsv_{node_name}")
         os.makedirs(temp_dir, exist_ok=True)

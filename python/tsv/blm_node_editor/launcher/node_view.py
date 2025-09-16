@@ -5,7 +5,7 @@ from tkinter import ttk, scrolledtext, Menu
 class NodeView:
     def __init__(self, root):
         self.root = root
-        self.root.title("BLM Node Manger")
+        self.root.title("BLM Node Manager")
         self.root.geometry("1200x700")
 
         # Configure font support
@@ -13,30 +13,65 @@ class NodeView:
         self.style.configure("Treeview.Heading", font=("Arial", 10, "bold"))
         self.style.configure("Treeview", font=("Arial", 10))
 
-        # Create main frame, split into left and right parts
-        self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.root.grid_columnconfigure(0, weight=1)
 
-        # Create left data editor area
-        self.left_frame = ttk.Frame(self.main_frame, width=600)
-        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        # Create main vertical paned window for all three rows with adjustable dividers
+        self.main_vertical_paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
+        self.main_vertical_paned.grid(row=0, column=0, sticky="nsew")
 
-        # Create right status display area
-        self.right_frame = ttk.LabelFrame(
-            self.main_frame, text="Node Service Status", width=200
+        self.nodes_table_frame = ttk.Frame(self.main_vertical_paned)
+        self.main_vertical_paned.add(self.nodes_table_frame, weight=7)
+        self.nodes_table_frame.grid_rowconfigure(0, weight=1)
+        self.nodes_table_frame.grid_columnconfigure(0, weight=1)
+
+        self.left_frame = ttk.LabelFrame(self.nodes_table_frame, text="Nodes Table")
+        self.left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.left_frame.grid_rowconfigure(0, weight=1)
+        self.left_frame.grid_columnconfigure(0, weight=1)
+
+        self.second_row_frame = ttk.Frame(self.main_vertical_paned)
+        self.main_vertical_paned.add(self.second_row_frame, weight=4)
+        self.second_row_frame.grid_rowconfigure(0, weight=1)
+        self.second_row_frame.grid_columnconfigure(0, weight=1)
+
+        self.second_row_paned = ttk.PanedWindow(
+            self.second_row_frame, orient=tk.HORIZONTAL
         )
-        self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
+        self.second_row_paned.grid(row=0, column=0, sticky="nsew", padx=10, pady=5)
 
-        # Create SSH operation buttons
+        self.status_frame = ttk.LabelFrame(
+            self.second_row_paned, text="Node Service Status"
+        )
+        self.status_frame.grid_propagate(True)
+        self.second_row_paned.add(self.status_frame, weight=1)
+
+        self.auth_frame = ttk.LabelFrame(
+            self.second_row_paned, text="Node Authentication", width=160, height=180
+        )
+        self.auth_frame.grid_propagate(
+            False
+        )  # Prevent frame from resizing based on content
+        self.second_row_paned.add(self.auth_frame, weight=1)
+
+        self.params_frame = ttk.LabelFrame(
+            self.second_row_paned, text="Node Service Parameters", width=300, height=300
+        )
+        self.params_frame.grid_propagate(
+            False
+        )  # Prevent frame from resizing based on content
+        self.second_row_paned.add(self.params_frame, weight=2)
+
         self.create_ssh_buttons()
 
-        # Create Treeview component (left side)
         self.create_treeview()
 
-        # Create node status display (right side)
         self.create_status_display()
 
-        # Create log display area (bottom)
+        self.log_frame_container = ttk.Frame(self.main_vertical_paned)
+        self.main_vertical_paned.add(self.log_frame_container, weight=1)
+        self.log_frame_container.grid_rowconfigure(0, weight=1)
+        self.log_frame_container.grid_columnconfigure(0, weight=1)
+
         self.create_log_display()
 
     def create_ssh_buttons(self):
@@ -47,6 +82,10 @@ class NodeView:
         # Create Treeview and scrollbars
         frame = ttk.Frame(self.left_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Configure internal grid for better layout management
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(0, weight=1)
 
         # Horizontal scrollbar
         h_scroll = ttk.Scrollbar(frame, orient=tk.HORIZONTAL)
@@ -111,6 +150,13 @@ class NodeView:
         self.context_menu.add_command(
             label="Edit NODES", command=lambda: self.edit_nodes_callback()
         )
+        self.context_menu.add_command(
+            label="Open FileDB", command=lambda: self.open_filedb_callback()
+        )
+        self.context_menu.add_separator()
+        self.context_menu.add_command(
+            label="Save Changes", command=lambda: self.save_changes_callback()
+        )
 
         # Bind right-click event to show menu
         self.tree.bind("<Button-3>", self.show_context_menu)
@@ -146,6 +192,12 @@ class NodeView:
     def connect_via_putty_callback(self):
         pass
 
+    def open_filedb_callback(self):
+        pass
+
+    def save_changes_callback(self):
+        pass
+
     def show_context_menu(self, event):
         row = self.tree.identify_row(event.y)
 
@@ -157,6 +209,12 @@ class NodeView:
             blank_menu = tk.Menu(self.root, tearoff=0)
             blank_menu.add_command(
                 label="Add TSV Item", command=lambda: self.add_tsv_item_callback()
+            )
+            blank_menu.add_command(
+                label="Open FileDB", command=lambda: self.open_filedb_callback()
+            )
+            blank_menu.add_command(
+                label="Save Changes", command=lambda: self.save_changes_callback()
             )
 
             if hasattr(self, "refresh_status_callback"):
@@ -170,10 +228,16 @@ class NodeView:
             self.root.blank_menu = blank_menu
 
     def create_status_display(self):
-        # Create status display area (right side)
-        # Status treeview
-        frame = ttk.Frame(self.right_frame)
-        frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Configure status_frame grid layout
+        self.status_frame.grid_columnconfigure(0, weight=1)
+        self.status_frame.grid_rowconfigure(0, weight=1)
+        self.status_frame.grid_propagate(True)
+
+        # Create status treeview
+        frame = ttk.Frame(self.status_frame)
+        frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
 
         # Vertical scrollbar
         v_scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL)
@@ -189,13 +253,13 @@ class NodeView:
 
         v_scroll.config(command=self.status_tree.yview)
 
-        # Set column headings and widths
+        # Set column headings and increased widths
         self.status_tree.heading("node_name", text="Node Name")
         self.status_tree.heading("ip", text="IP Address")
         self.status_tree.heading("status", text="Service Status")
-        self.status_tree.column("node_name", width=120, anchor=tk.CENTER)
-        self.status_tree.column("ip", width=120, anchor=tk.CENTER)
-        self.status_tree.column("status", width=120, anchor=tk.CENTER)
+        self.status_tree.column("node_name", width=140, anchor=tk.CENTER)
+        self.status_tree.column("ip", width=140, anchor=tk.CENTER)
+        self.status_tree.column("status", width=140, anchor=tk.CENTER)
 
         self.status_tree.pack(fill=tk.BOTH, expand=True)
 
@@ -207,156 +271,183 @@ class NodeView:
         # Add standalone status with purple color
         self.status_tree.tag_configure("status_standalone", foreground="purple")
 
-        # Create authentication info area
-        auth_frame = ttk.LabelFrame(self.right_frame, text="Node Authentication")
-        auth_frame.pack(fill=tk.X, padx=10, pady=10)
+        # Create authentication fields directly in auth_frame
+        self.auth_frame.grid_columnconfigure(0, weight=1)
 
         # Node name label
         self.auth_node_name = tk.StringVar()
         self.auth_node_name.set("No node selected")
-        ttk.Label(auth_frame, textvariable=self.auth_node_name).pack(
-            pady=5, anchor=tk.W
+        ttk.Label(self.auth_frame, textvariable=self.auth_node_name).grid(
+            row=0, column=0, sticky="w", padx=10, pady=5
         )
 
         # Username field
-        ttk.Label(auth_frame, text="Username:").pack(pady=2, anchor=tk.W)
-        self.username_var = tk.StringVar()
-        self.username_entry = ttk.Entry(
-            auth_frame, textvariable=self.username_var, width=20
+        ttk.Label(self.auth_frame, text="Username:").grid(
+            row=1, column=0, sticky="w", padx=10, pady=2
         )
-        self.username_entry.pack(pady=2, fill=tk.X)
+        self.username_var = tk.StringVar()
+        self.username_entry = ttk.Entry(self.auth_frame, textvariable=self.username_var)
+        self.username_entry.grid(row=2, column=0, sticky="ew", padx=10, pady=2)
 
         # Password field
-        ttk.Label(auth_frame, text="Password:").pack(pady=2, anchor=tk.W)
+        ttk.Label(self.auth_frame, text="Password:").grid(
+            row=3, column=0, sticky="w", padx=10, pady=2
+        )
         self.password_var = tk.StringVar()
         self.password_entry = ttk.Entry(
-            auth_frame, textvariable=self.password_var, show="*", width=20
+            self.auth_frame, textvariable=self.password_var, show="*"
         )
-        self.password_entry.pack(pady=2, fill=tk.X)
+        self.password_entry.grid(row=4, column=0, sticky="ew", padx=10, pady=2)
 
         # Apply button
-        self.apply_auth_button = ttk.Button(auth_frame, text="Apply Changes")
-        self.apply_auth_button.pack(pady=10)
+        self.apply_auth_button = ttk.Button(self.auth_frame, text="Apply Changes")
+        self.apply_auth_button.grid(row=5, column=0, pady=10, padx=10)
 
-        # Create parameters configuration area
-        params_frame = ttk.LabelFrame(self.right_frame, text="Node Service Parameters")
-        params_frame.pack(fill=tk.X, padx=10, pady=10)
+        # Create parameters fields directly in params_frame
+        self.params_frame.grid_columnconfigure(0, weight=1)
 
         # LACCS Path parameter
-        ttk.Label(params_frame, text="LACCS Installation Path:").pack(
-            pady=2, anchor=tk.W
+        ttk.Label(self.params_frame, text="LACCS Installation Path:").grid(
+            row=0, column=0, sticky="w", pady=2
         )
         self.laccs_path_var = tk.StringVar()
         self.laccs_path_entry = ttk.Entry(
-            params_frame, textvariable=self.laccs_path_var, width=30
+            self.params_frame, textvariable=self.laccs_path_var
         )
-        self.laccs_path_entry.pack(pady=2, fill=tk.X)
+        self.laccs_path_entry.grid(row=1, column=0, sticky="ew", pady=2)
 
         # Node Name parameter
-        ttk.Label(params_frame, text="Node Name (--D:node_name):").pack(
-            pady=2, anchor=tk.W
+        ttk.Label(self.params_frame, text="Node Name (--D:node_name):").grid(
+            row=2, column=0, sticky="w", pady=2
         )
         self.node_name_var = tk.StringVar()
         self.node_name_entry = ttk.Entry(
-            params_frame, textvariable=self.node_name_var, width=30
+            self.params_frame, textvariable=self.node_name_var
         )
-        self.node_name_entry.pack(pady=2, fill=tk.X)
+        self.node_name_entry.grid(row=3, column=0, sticky="ew", pady=2)
 
         # Device Name parameter
-        ttk.Label(params_frame, text="Device Name (--D:device_name):").pack(
-            pady=2, anchor=tk.W
+        ttk.Label(self.params_frame, text="Device Name (--D:device_name):").grid(
+            row=4, column=0, sticky="w", pady=2
         )
         self.device_name_var = tk.StringVar()
         self.device_name_entry = ttk.Entry(
-            params_frame, textvariable=self.device_name_var, width=30
+            self.params_frame, textvariable=self.device_name_var
         )
-        self.device_name_entry.pack(pady=2, fill=tk.X)
+        self.device_name_entry.grid(row=5, column=0, sticky="ew", pady=2)
 
         # Channel parameters
-        ttk.Label(params_frame, text="Channels (--D:ch00~ch05):").pack(
-            pady=5, anchor=tk.W
+        ttk.Label(self.params_frame, text="Channels (--D:ch00~ch05):").grid(
+            row=6, column=0, sticky="w", pady=5
         )
 
         # Create a frame for channel entries
-        channels_frame = ttk.Frame(params_frame)
-        channels_frame.pack(fill=tk.X, padx=5)
+        channels_frame = ttk.Frame(self.params_frame)
+        channels_frame.grid(row=7, column=0, sticky="ew", padx=5)
+
+        # Configure channel frame layout
+        channels_frame.grid_columnconfigure(0, weight=1)
+        channels_frame.grid_columnconfigure(1, weight=1)
+        channels_frame.grid_columnconfigure(2, weight=1)
 
         # CH00-CH02 in first row
-        row1_frame = ttk.Frame(channels_frame)
-        row1_frame.pack(fill=tk.X)
-
-        ttk.Label(row1_frame, text="CH00:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(channels_frame, text="CH00:").grid(
+            row=0, column=0, sticky="w", padx=(0, 5)
+        )
         self.ch00_var = tk.StringVar()
-        self.ch00_entry = ttk.Entry(row1_frame, textvariable=self.ch00_var, width=15)
-        self.ch00_entry.pack(side=tk.LEFT, padx=5)
+        self.ch00_entry = ttk.Entry(channels_frame, textvariable=self.ch00_var)
+        self.ch00_entry.grid(row=0, column=0, sticky="ew", padx=(40, 5))
 
-        ttk.Label(row1_frame, text="CH01:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(channels_frame, text="CH01:").grid(
+            row=0, column=1, sticky="w", padx=(0, 5)
+        )
         self.ch01_var = tk.StringVar()
-        self.ch01_entry = ttk.Entry(row1_frame, textvariable=self.ch01_var, width=15)
-        self.ch01_entry.pack(side=tk.LEFT, padx=5)
+        self.ch01_entry = ttk.Entry(channels_frame, textvariable=self.ch01_var)
+        self.ch01_entry.grid(row=0, column=1, sticky="ew", padx=(40, 5))
 
-        ttk.Label(row1_frame, text="CH02:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(channels_frame, text="CH02:").grid(
+            row=0, column=2, sticky="w", padx=(0, 5)
+        )
         self.ch02_var = tk.StringVar()
-        self.ch02_entry = ttk.Entry(row1_frame, textvariable=self.ch02_var, width=15)
-        self.ch02_entry.pack(side=tk.LEFT, padx=5)
+        self.ch02_entry = ttk.Entry(channels_frame, textvariable=self.ch02_var)
+        self.ch02_entry.grid(row=0, column=2, sticky="ew", padx=(40, 5))
 
         # CH03-CH05 in second row
-        row2_frame = ttk.Frame(channels_frame)
-        row2_frame.pack(fill=tk.X, pady=5)
-
-        ttk.Label(row2_frame, text="CH03:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(channels_frame, text="CH03:").grid(
+            row=1, column=0, sticky="w", padx=(0, 5), pady=5
+        )
         self.ch03_var = tk.StringVar()
-        self.ch03_entry = ttk.Entry(row2_frame, textvariable=self.ch03_var, width=15)
-        self.ch03_entry.pack(side=tk.LEFT, padx=5)
+        self.ch03_entry = ttk.Entry(channels_frame, textvariable=self.ch03_var)
+        self.ch03_entry.grid(row=1, column=0, sticky="ew", padx=(40, 5), pady=5)
 
-        ttk.Label(row2_frame, text="CH04:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(channels_frame, text="CH04:").grid(
+            row=1, column=1, sticky="w", padx=(0, 5), pady=5
+        )
         self.ch04_var = tk.StringVar()
-        self.ch04_entry = ttk.Entry(row2_frame, textvariable=self.ch04_var, width=15)
-        self.ch04_entry.pack(side=tk.LEFT, padx=5)
+        self.ch04_entry = ttk.Entry(channels_frame, textvariable=self.ch04_var)
+        self.ch04_entry.grid(row=1, column=1, sticky="ew", padx=(40, 5), pady=5)
 
-        ttk.Label(row2_frame, text="CH05:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(channels_frame, text="CH05:").grid(
+            row=1, column=2, sticky="w", padx=(0, 5), pady=5
+        )
         self.ch05_var = tk.StringVar()
-        self.ch05_entry = ttk.Entry(row2_frame, textvariable=self.ch05_var, width=15)
-        self.ch05_entry.pack(side=tk.LEFT, padx=5)
+        self.ch05_entry = ttk.Entry(channels_frame, textvariable=self.ch05_var)
+        self.ch05_entry.grid(row=1, column=2, sticky="ew", padx=(40, 5), pady=5)
 
         # Apply parameters button
-        self.apply_params_button = ttk.Button(params_frame, text="Apply Parameters")
-        self.apply_params_button.pack(pady=10)
+        self.apply_params_button = ttk.Button(
+            self.params_frame, text="Apply Parameters"
+        )
+        self.apply_params_button.grid(row=8, column=0, pady=10)
 
     def create_log_display(self):
-        # Create log display area at the bottom
-        log_frame = ttk.LabelFrame(self.root, text="Real-time Log")
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Create log display area inside the log_frame_container
+        log_frame = ttk.LabelFrame(self.log_frame_container, text="Real-time Log")
+        log_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=(5, 10))
+
+        # Configure log_frame grid layout with proper weight distribution
+        log_frame.grid_columnconfigure(0, weight=1)
+        log_frame.grid_rowconfigure(1, weight=1)
+        log_frame.grid_rowconfigure(0, weight=0)
+        log_frame.grid_rowconfigure(2, weight=0)
+
+        # Set height for log_frame but allow it to expand vertically
+        log_frame.grid_propagate(True)
 
         # Create search/filter frame
         filter_frame = ttk.Frame(log_frame)
-        filter_frame.pack(fill=tk.X, padx=5, pady=2)
+        filter_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=2)
+        filter_frame.grid_columnconfigure(1, weight=1)
 
         # Search label
-        ttk.Label(filter_frame, text="Search Log:", anchor=tk.W).pack(
-            side=tk.LEFT, padx=5
+        ttk.Label(filter_frame, text="Search Log:", anchor=tk.W).grid(
+            row=0, column=0, sticky="w", padx=5
         )
 
         # Search entry
         self.log_filter_var = tk.StringVar()
         self.log_filter_entry = ttk.Entry(
-            filter_frame, textvariable=self.log_filter_var, width=30
+            filter_frame, textvariable=self.log_filter_var
         )
-        self.log_filter_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.log_filter_entry.grid(row=0, column=1, sticky="ew", padx=5)
 
-        # Create scrolled text widget for log
+        # Create scrolled text widget for log with resizable properties
         self.log_text = scrolledtext.ScrolledText(
-            log_frame, wrap=tk.WORD, font=("Arial", 9), state=tk.DISABLED
+            log_frame, wrap=tk.WORD, font=("Arial", 9), state=tk.DISABLED, height=8
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.log_text.configure(width=1)
+        log_frame.bind("<Configure>", lambda event: self.log_text.update_idletasks())
 
-        # Add clear log button
+        # Add buttons frame
         button_frame = ttk.Frame(log_frame)
-        button_frame.pack(fill=tk.X, padx=5, pady=2)
-
-        clear_button = ttk.Button(button_frame, text="Clear Log")
-        clear_button.pack(side=tk.RIGHT, padx=5)
+        button_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=2)
+        button_frame.grid_columnconfigure(0, weight=1)
 
         # Add refresh status button
         refresh_button = ttk.Button(button_frame, text="Refresh Status")
-        refresh_button.pack(side=tk.RIGHT, padx=5)
+        refresh_button.grid(row=0, column=1, padx=5)
+
+        # Add clear log button
+        clear_button = ttk.Button(button_frame, text="Clear Log")
+        clear_button.grid(row=0, column=2, padx=5)

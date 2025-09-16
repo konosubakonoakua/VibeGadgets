@@ -1,26 +1,107 @@
 import os
 import csv
 import os
+import sys
+import tkinter as tk
+from tkinter import filedialog
 
 
 class NodeModel:
     def __init__(self):
-        # Get TSV file path
-        self.tsv_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "FileDB",
-            "NODES.tsv",
-        )
+        # Initialize with default path - priority to executable directory
+        self.tsv_file = None
+        self._initialize_default_path()
         self.node_data = []
         self.headers = []
         self.node_statuses = {}
+        # Flag to track if user has selected a custom file path
+        self.user_selected_path = False
         self.non_local_nodes = []
         self.node_credentials = {}
         self.node_params = {}  # Store node parameters for service startup
 
-    def load_node_data(self):
-        """Load node data from TSV file"""
+    def _initialize_default_path(self):
+        """Initialize default path for NODES.tsv with priority to executable directory"""
+        # Initialize variables first to prevent NameError if try block fails
+        current_dir = os.getcwd()
+        exe_dir = os.path.dirname(sys.executable)
+
         try:
+            # Priority 1: Check for file in the current working directory
+            current_dir_path = os.path.join(current_dir, "FileDB", "NODES.tsv")
+            if os.path.exists(current_dir_path):
+                self.tsv_file = current_dir_path
+                return
+
+            # Priority 2: Check for file in the same directory as the executable
+            exe_same_dir_path = os.path.join(exe_dir, "FileDB", "NODES.tsv")
+            if os.path.exists(exe_same_dir_path):
+                self.tsv_file = exe_same_dir_path
+                return
+
+            # If file not found, set path to the expected location but don't create dialog here
+            # File selection will be handled in load_node_data which has access to main window
+            self.tsv_file = os.path.join(current_dir, "FileDB", "NODES.tsv")
+
+        except Exception:
+            # Fallback in case of any error: Set path to current working directory's FileDB first, then executable directory
+            if os.path.exists(os.path.join(current_dir, "FileDB")):
+                self.tsv_file = os.path.join(current_dir, "FileDB", "NODES.tsv")
+            else:
+                self.tsv_file = os.path.join(exe_dir, "FileDB", "NODES.tsv")
+
+    def select_external_nodes_file(self, parent=None):
+        """Allow user to select an external NODES.tsv file
+
+        Args:
+            parent: Optional parent window for the file dialog. If not provided,
+                    the dialog will use the default window.
+
+        Returns:
+            tuple: (success_flag, message)
+        """
+        try:
+            # Open file dialog for TSV files
+            file_path = filedialog.askopenfilename(
+                title="Select NODES.tsv File",
+                filetypes=[("TSV files", "*.tsv"), ("All files", "*.*")],
+                parent=parent,
+            )
+
+            if file_path:
+                self.tsv_file = file_path
+                self.user_selected_path = True
+                return True, f"Selected file: {file_path}"
+            else:
+                return False, "File selection cancelled"
+        except Exception as e:
+            return False, f"Error selecting file: {str(e)}"
+
+    def load_node_data(self, parent=None):
+        """Load node data from TSV file
+
+        Args:
+            parent: Optional parent window for dialogs that might be shown
+                    during the loading process.
+
+        Returns:
+            tuple: (success_flag, message)
+        """
+        try:
+            # Check if the file exists before attempting to open it
+            if not os.path.exists(self.tsv_file):
+                # If user has selected a custom path but it doesn't exist, ask them to select again
+                if self.user_selected_path:
+                    result, message = self.select_external_nodes_file(parent=parent)
+                    if not result:
+                        return False, f"Failed to select valid file: {message}"
+                    # Try to load with the new path
+                    return self.load_node_data(parent=parent)
+                return (
+                    False,
+                    f"Failed to read file: [Errno 2] No such file or directory: '{self.tsv_file}'",
+                )
+
             with open(self.tsv_file, "r", encoding="utf-8") as file:
                 reader = csv.reader(file, delimiter="\t")
                 lines = list(reader)
@@ -44,6 +125,12 @@ class NodeModel:
     def save_node_data(self, data):
         """Save node data to TSV file"""
         try:
+            # Ensure directory exists if saving to user-selected path
+            if self.user_selected_path:
+                directory = os.path.dirname(self.tsv_file)
+                if directory and not os.path.exists(directory):
+                    os.makedirs(directory)
+
             with open(self.tsv_file, "w", encoding="utf-8", newline="") as file:
                 writer = csv.writer(file, delimiter="\t")
                 # Write header row (add # sign)
