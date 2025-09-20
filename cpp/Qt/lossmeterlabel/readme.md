@@ -1,0 +1,1 @@
+![](./lossmeterlabel.png)
