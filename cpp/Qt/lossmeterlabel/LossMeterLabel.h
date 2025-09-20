@@ -25,6 +25,7 @@ class LossMeterLabel : public QLabel
     Q_PROPERTY(int warningOpacity READ warningOpacity WRITE setWarningOpacity)
     Q_PROPERTY(bool showPercentage READ showPercentage WRITE setShowPercentage)
     Q_PROPERTY(bool showValue READ showValue WRITE setShowValue)
+    Q_PROPERTY(bool useFillMode READ useFillMode WRITE setUseFillMode)
 
 
 public:
@@ -51,6 +52,9 @@ public:
     void setWarningColor(const QColor &color);
     void setDangerColor(const QColor &color);
     void setGradientColors(const QColor &start, const QColor &end);
+    
+    // Fill mode settings
+    bool useFillMode() const;
 
 public slots:
     void setValue(double value);
@@ -67,6 +71,7 @@ public slots:
     void setWarningOpacity(int opacity);
     void setShowPercentage(bool show);
     void setShowValue(bool show);
+    void setUseFillMode(bool useFill);
     void reset();
 
 signals:
@@ -110,6 +115,7 @@ private:
 
     bool m_useGradient;
     bool m_enableGradientAlerts;
+    bool m_useFillMode;
     bool m_isAlerting;
     bool m_isWarning;
     int m_alertState;

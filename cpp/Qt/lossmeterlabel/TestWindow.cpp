@@ -27,9 +27,9 @@ TestWindow::TestWindow(QWidget *parent)
         m_lossMeters[i] = new LossMeterLabel(this);
         m_lossMeters[i]->setFixedSize(sizes[i], sizes[i]);
         m_lossMeters[i]->setMinValue(0);
-        m_lossMeters[i]->setMaxValue(100);
-        m_lossMeters[i]->setWarningThreshold(40);
-        m_lossMeters[i]->setDangerThreshold(70);
+        m_lossMeters[i]->setMaxValue(10000);
+        m_lossMeters[i]->setWarningThreshold(5000);
+        m_lossMeters[i]->setDangerThreshold(8000);
 
         // Connect signals from the first meter to status updates
         if (i == 0) {
@@ -60,12 +60,12 @@ TestWindow::TestWindow(QWidget *parent)
     valueLayout->addWidget(new QLabel("Value:", this));
 
     m_valueSlider = new QSlider(Qt::Horizontal, this);
-    m_valueSlider->setRange(0, 100);
+    m_valueSlider->setRange(0, 10000);
     m_valueSlider->setValue(0);
     connect(m_valueSlider, &QSlider::valueChanged, this, &TestWindow::updateValue);
 
     m_valueSpinBox = new QSpinBox(this);
-    m_valueSpinBox->setRange(0, 100);
+    m_valueSpinBox->setRange(0, 10000);
     m_valueSpinBox->setValue(0);
     connect(m_valueSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), m_valueSlider, &QSlider::setValue);
     connect(m_valueSlider, &QSlider::valueChanged, m_valueSpinBox, &QSpinBox::setValue);
@@ -83,7 +83,7 @@ TestWindow::TestWindow(QWidget *parent)
     QVBoxLayout *displayLayout = new QVBoxLayout(displayGroup);
 
     QCheckBox *valueCheckBox = new QCheckBox("Show Value", this);
-    valueCheckBox->setChecked(true);
+    valueCheckBox->setChecked(false);
     connect(valueCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
         for (auto meter : m_lossMeters) {
             meter->setShowValue(checked);
@@ -92,7 +92,7 @@ TestWindow::TestWindow(QWidget *parent)
     displayLayout->addWidget(valueCheckBox);
 
     QCheckBox *percentageCheckBox = new QCheckBox("Show Percentage", this);
-    percentageCheckBox->setChecked(true);
+    percentageCheckBox->setChecked(false);
     connect(percentageCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
         for (auto meter : m_lossMeters) {
             meter->setShowPercentage(checked);
@@ -101,9 +101,18 @@ TestWindow::TestWindow(QWidget *parent)
     displayLayout->addWidget(percentageCheckBox);
 
     m_gradientCheckBox = new QCheckBox("Enable Gradient Mode", this);
+    m_gradientCheckBox->setChecked(true);
     connect(m_gradientCheckBox, &QCheckBox::toggled, this, &TestWindow::toggleGradient);
     displayLayout->addWidget(m_gradientCheckBox);
-
+    
+    QCheckBox *fillModeCheckBox = new QCheckBox("Enable Fill Mode", this);
+    connect(fillModeCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+        for (auto meter : m_lossMeters) {
+            meter->setUseFillMode(checked);
+        }
+    });
+    displayLayout->addWidget(fillModeCheckBox);
+    
     QCheckBox *gradientAlertCheckBox = new QCheckBox("Enable Gradient Alerts", this);
     gradientAlertCheckBox->setChecked(true);
     connect(gradientAlertCheckBox, &QCheckBox::toggled, this, [this](bool checked) {

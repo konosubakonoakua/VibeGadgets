@@ -7,10 +7,10 @@
 LossMeterLabel::LossMeterLabel(QWidget *parent)
     : QLabel(parent)
     , m_value(0.0)
-    , m_warningThreshold(50.0)
-    , m_dangerThreshold(80.0)
+    , m_warningThreshold(5000.0)
+    , m_dangerThreshold(8000.0)
     , m_minValue(0.0)
-    , m_maxValue(100.0)
+    , m_maxValue(10000.0)
     , m_alertBorderWidth(4)
     , m_alertLineStyle(Qt::DotLine)
     , m_warningLineStyle(Qt::DashLine)
@@ -25,14 +25,15 @@ LossMeterLabel::LossMeterLabel(QWidget *parent)
     , m_gradientEndColor(QColor(255, 0, 0))
     , m_useGradient(true)
     , m_enableGradientAlerts(true)
+    , m_useFillMode(false)
     , m_isAlerting(false)
     , m_isWarning(false)
     , m_alertState(0)
     , m_warningState(0)
 {
     setAlignment(Qt::AlignCenter);
-    setMinimumSize(120, 120);
-    setMaximumSize(200, 200);
+    setMinimumSize(2, 2);
+    setMaximumSize(300, 300);
 
     QFont font = this->font();
     font.setPointSize(12);
@@ -70,6 +71,7 @@ int LossMeterLabel::alertOpacity() const  {  return m_alertOpacity;  }
 int LossMeterLabel::warningOpacity() const  {  return m_warningOpacity;  }
 bool LossMeterLabel::showPercentage() const  {  return m_showPercentage;  }
 bool LossMeterLabel::showValue() const  {  return m_showValue;  }
+bool LossMeterLabel::useFillMode() const { return m_useFillMode; }
 #endif
 
 #if 1 // setter
@@ -204,6 +206,14 @@ void LossMeterLabel::setShowValue(bool show)
     }
 }
 
+void LossMeterLabel::setUseFillMode(bool useFill)
+{
+    if (m_useFillMode != useFill) {
+        m_useFillMode = useFill;
+        updateAppearance();
+    }
+}
+
 void LossMeterLabel::setNormalColor(const QColor &color)
 {
     m_normalColor = color;
@@ -300,6 +310,7 @@ void LossMeterLabel::updateAppearance()
                         ).arg(radius).arg(backgroundColor.name());
 
     setStyleSheet(style);
+    
 
     QString displayText;
 
@@ -382,15 +393,31 @@ void LossMeterLabel::paintEvent(QPaintEvent *event)
     if (m_isAlerting && m_alertState == 1) {
         QColor alertColor = Qt::white;
         alertColor.setAlpha(m_alertOpacity);
-        painter.setPen(QPen(alertColor, m_alertBorderWidth, m_alertLineStyle));
-        painter.drawEllipse(innerRect);
+        
+        if (m_useFillMode) {
+            alertColor.setAlpha(m_alertOpacity);
+            painter.setBrush(QBrush(alertColor));
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(innerRect);
+        } else {
+            painter.setPen(QPen(alertColor, m_alertBorderWidth, m_alertLineStyle));
+            painter.drawEllipse(innerRect);
+        }
     }
 
     if (m_isWarning && m_warningState == 1) {
         QColor warningColor = Qt::white;
         warningColor.setAlpha(m_warningOpacity);
-        painter.setPen(QPen(warningColor, m_alertBorderWidth, m_warningLineStyle));
-        painter.drawEllipse(innerRect);
+        
+        if (m_useFillMode) {
+            warningColor.setAlpha(m_warningOpacity);
+            painter.setBrush(QBrush(warningColor));
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(innerRect);
+        } else {
+            painter.setPen(QPen(warningColor, m_alertBorderWidth, m_warningLineStyle));
+            painter.drawEllipse(innerRect);
+        }
     }
 }
 
