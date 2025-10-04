@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk, filedialog
 import threading
@@ -66,6 +67,7 @@ class NodeController:
         self.view.connect_via_putty_callback = self.connect_via_putty
         self.view.open_filedb_callback = self.open_filedb
         self.view.save_changes_callback = self.save_changes
+        self.view.load_service_parameter_callback = self.load_service_parameter
 
         # Bind authentication apply button
         self.view.apply_auth_button.config(command=self.apply_authentication)
@@ -272,6 +274,84 @@ class NodeController:
             self.unsaved_label.config(text="")
             # Restore original window title
             self.root.title("LACCS - Node Manager")
+
+    def load_service_parameter(self):
+        """Load service parameters from BDMap.json file and update all nodes' parameters"""
+        try:
+            # Open file dialog for JSON files
+            file_path = filedialog.askopenfilename(
+                title="Select BDMap.json File",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                initialdir=os.path.dirname(os.path.abspath(__file__)),
+                parent=self.root
+            )
+
+            if not file_path:
+                return  # User canceled file selection
+
+            # Read and parse JSON file
+            import json
+            with open(file_path, 'r', encoding='utf-8') as file:
+                bd_map = json.load(file)
+
+            # Now update all nodes in the Treeview with matching parameters
+            updated_count = 0
+            for item in self.view.tree.get_children():
+                node_name = self.view.tree.item(item, "values")[0]
+                
+                # First get existing params to preserve default values
+                existing_params = self.model.get_node_params(node_name)
+                matching_found = False
+                
+                # Find matching parameter in bd_map
+                for key, value in bd_map.items():
+                    # Check if BDMap key starts with BD and contains BLMER and the node name
+                    if key.startswith('BD') and 'BLMER' in key and node_name in key:
+                        # Split value by |
+                        parts = value.split('|')
+                        if len(parts) >= 3:
+                            # Extract the macro part (third part)
+                            macro_part = parts[2]
+                            
+                            # Parse macro_part into params dictionary
+                            new_params = {}
+                            # The key is also the macro {node_name}
+                            new_params['node_name'] = key
+                            
+                            # Parse each parameter in macro_part
+                            param_pairs = macro_part.split(',')
+                            for pair in param_pairs:
+                                if '=' in pair:
+                                    param_key, param_value = pair.split('=', 1)
+                                    # Remove { and } from param_key if present
+                                    param_key = param_key.strip('{}')
+                                    new_params[param_key] = param_value
+                            
+                            # Update the existing params with new params
+                            existing_params.update(new_params)
+                            # Set laccs_path to '/opt/LACCS' after loading JSON
+                            existing_params['laccs_path'] = '/opt/LACCS'
+                            
+                            # Update node parameters in the model
+                            self.model.set_node_params(node_name, existing_params)
+                            updated_count += 1
+                            matching_found = True
+                            break  # Stop searching once a match is found
+                
+                # If no match found, keep existing params but ensure laccs_path exists
+                if not matching_found and 'laccs_path' not in existing_params:
+                    existing_params['laccs_path'] = '/opt/LACCS#'
+                    self.model.set_node_params(node_name, existing_params)
+
+            # Show success message
+            messagebox.showinfo("Success", f"Updated {updated_count} nodes with service parameters")
+            self.log_message(f"Successfully loaded service parameters from {file_path}")
+            self.log_message(f"Updated parameters for {updated_count} nodes")
+            
+        except Exception as e:
+            error_msg = f"Failed to load service parameters: {str(e)}"
+            messagebox.showerror("Error", error_msg)
+            self.log_message(f"ERROR: {error_msg}")
 
     def save_changes(self, event=None):
         """Save all changes to the file"""
@@ -1448,7 +1528,7 @@ class NodeController:
                 self.root.after(
                     0,
                     lambda name=node_name: (
-                        self.log_message(
+                        self.log_message_ignore(
                             f"Skipping status check for localhost node {name}"
                         ),
                         self.update_node_status(name, "Localhost"),
@@ -1458,7 +1538,7 @@ class NodeController:
 
             self.root.after(
                 0,
-                lambda name=node_name, addr=ip: self.log_message(
+                lambda name=node_name, addr=ip: self.log_message_ignore(
                     f"Checking status for {name} ({addr})..."
                 ),
             )
@@ -1641,7 +1721,7 @@ class NodeController:
                     self.view.status_tree.item(item, tags=("status_unknown",))
                 break
 
-        self.log_message(f"Status updated for {node_name}: {status}")
+        self.log_message_ignore(f"Status updated for {node_name}: {status}")
 
     def setup_log_file(self):
         """Create log file with timestamp"""
@@ -1665,6 +1745,9 @@ class NodeController:
             self.log_file.flush()
         except Exception as e:
             print(f"Failed to create log file: {str(e)}")
+
+    def log_message_ignore(self, message):
+        return
 
     def log_message(self, message):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

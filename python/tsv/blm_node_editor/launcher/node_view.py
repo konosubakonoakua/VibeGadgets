@@ -118,45 +118,35 @@ class NodeView:
 
         # Add menu items corresponding to the buttons
         self.context_menu.add_command(
-            label="Start Service", command=lambda: self.start_service_callback()
-        )
+            label="Start Service", command=lambda: self.start_service_callback())
         self.context_menu.add_command(
-            label="Stop Service", command=lambda: self.stop_service_callback()
-        )
+            label="Stop Service", command=lambda: self.stop_service_callback())
         self.context_menu.add_command(
-            label="Restart Service", command=lambda: self.restart_service_callback()
-        )
+            label="Restart Service", command=lambda: self.restart_service_callback())
         self.context_menu.add_separator()
         self.context_menu.add_command(
-            label="Deploy", command=lambda: self.deploy_service_callback()
-        )
+            label="Deploy", command=lambda: self.deploy_service_callback())
         self.context_menu.add_command(
-            label="Launch BDBLM", command=lambda: self.launch_bdblm_callback()
-        )
+            label="Launch BDBLM", command=lambda: self.launch_bdblm_callback())
         self.context_menu.add_command(
-            label="Connect via Putty", command=lambda: self.connect_via_putty_callback()
-        )
+            label="Connect via Putty", command=lambda: self.connect_via_putty_callback())
         self.context_menu.add_separator()
         self.context_menu.add_command(
-            label="Add TSV Item", command=lambda: self.add_tsv_item_callback()
-        )
+            label="Add TSV Item", command=lambda: self.add_tsv_item_callback())
         self.context_menu.add_command(
-            label="Delete TSV Item", command=lambda: self.delete_tsv_item_callback()
-        )
+            label="Delete TSV Item", command=lambda: self.delete_tsv_item_callback())
         self.context_menu.add_separator()
         self.context_menu.add_command(
-            label="Edit Config", command=lambda: self.edit_config_callback()
-        )
+            label="Edit Config", command=lambda: self.edit_config_callback())
         self.context_menu.add_command(
-            label="Edit NODES", command=lambda: self.edit_nodes_callback()
-        )
+            label="Edit NODES", command=lambda: self.edit_nodes_callback())
         self.context_menu.add_command(
-            label="Open FileDB", command=lambda: self.open_filedb_callback()
-        )
+            label="Open FileDB", command=lambda: self.open_filedb_callback())
+        self.context_menu.add_command(
+            label="Load Service Parameter", command=lambda: self.load_service_parameter_callback())
         self.context_menu.add_separator()
         self.context_menu.add_command(
-            label="Save Changes", command=lambda: self.save_changes_callback()
-        )
+            label="Save Changes", command=lambda: self.save_changes_callback())
 
         # Bind right-click event to show menu
         self.tree.bind("<Button-3>", self.show_context_menu)
@@ -198,6 +188,9 @@ class NodeView:
     def save_changes_callback(self):
         pass
 
+    def load_service_parameter_callback(self):
+        pass
+
     def show_context_menu(self, event):
         row = self.tree.identify_row(event.y)
 
@@ -212,6 +205,9 @@ class NodeView:
             )
             blank_menu.add_command(
                 label="Open FileDB", command=lambda: self.open_filedb_callback()
+            )
+            blank_menu.add_command(
+                label="Load Service Parameter", command=lambda: self.load_service_parameter_callback()
             )
             blank_menu.add_command(
                 label="Save Changes", command=lambda: self.save_changes_callback()
