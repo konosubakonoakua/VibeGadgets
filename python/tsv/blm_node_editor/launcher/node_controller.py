@@ -15,6 +15,9 @@ class NodeController:
         self.model = NodeModel()
         self.view = NodeView(root)
         self.root = root
+        
+        # Flag to track if main loop is active - Initialize early
+        self.main_loop_active = True
 
         # Log related settings - Initialize first
         self.log_history = []  # Store all log entries for filtering
@@ -29,6 +32,12 @@ class NodeController:
 
         # Status check thread control
         self.stop_status_check = False
+        # Track nodes that consistently time out to avoid repeated errors
+        self.timed_out_nodes = {}
+        # Maximum allowed consecutive timeouts before temporarily skipping a node
+        self.MAX_CONSECUTIVE_TIMEOUTS = 3
+        # Time in seconds to wait before checking a problematic node again
+        self.TIMEOUT_RETRY_INTERVAL = 300  # 5 minutes
 
         # Track unsaved changes
         self.has_unsaved_changes = False
@@ -48,6 +57,9 @@ class NodeController:
         # Bind Ctrl+S shortcut for saving
         self.root.bind("<Control-s>", self.save_changes)
         self.root.bind("<Control-S>", self.save_changes)
+
+        # Flag to track if main loop is active
+        self.main_loop_active = True
 
     def _bind_events(self):
         # Bind events and commands
@@ -466,26 +478,31 @@ class NodeController:
         # Get current status to determine if it's running in screen or standalone
         current_status = self._get_node_status(node_name, ip)
 
+        # Get node parameters
+        params = self.model.get_node_params(node_name)
+
+        # Generate the screen command with dynamic parameters
+        screen_command = f"screen -wipe; screen -L -dmS LACCS bash -lc \"cd {params['laccs_path']} && ulimit -n 204800 && ulimit -s 81920 && ./LACCS --user_name=guest --password=guest_password --data_id=uptodate --D:node_name={params['node_name']} --D:device_name={params['device_name']} --D:ch00={params['ch00']} --D:ch01={params['ch01']} --D:ch02={params['ch02']} --D:ch03={params['ch03']} --D:ch04={params['ch04']} --D:ch05={params['ch05']}; exec bash\""
+
         if current_status == "Running" or current_status == "standalone":
             # Service is running (either in screen or standalone), ask user whether to kill current process and continue
-            response = messagebox.askyesnocancel(
+            response = messagebox.askyesno(
                 "Service Running",
                 f"Service on node {node_name} ({ip}) is already running (mode: {current_status}).\n\n"
-                + "Choose 'Yes' to kill current process and start new service,\n"
-                + "Choose 'No' to abort starting new service,\n"
-                + "or 'Cancel' the operation.",
+                + f"Command to be executed:\n1. Stop current service\n2. {screen_command}\n\n"
+                + "Do you want to proceed with starting new service?",
             )
 
-            if response is None or response is False:
-                # User canceled or chose not to kill current process
+            if not response:
+                # User canceled
                 self.log_message(
                     f"User aborted starting new service on node {node_name} ({ip})"
                 )
                 return
             else:
-                # User chose to kill current process
+                # User chose to proceed
                 self.log_message(
-                    f"User chose to kill current process on node {node_name} ({ip})"
+                    f"User chose to kill current process and start new service on node {node_name} ({ip})"
                 )
 
                 # Use different commands to stop based on service type
@@ -506,12 +523,21 @@ class NodeController:
 
                 # Wait a moment to ensure service has stopped
                 time.sleep(1)
+        else:
+            # First time start, show confirmation dialog
+            response = messagebox.askyesno(
+                "Start Service",
+                f"Starting service on node {node_name} ({ip}).\n\n"
+                + f"Command to be executed:\n{screen_command}\n\n" 
+                + "Do you want to proceed?",
+            )
 
-        # Get node parameters
-        params = self.model.get_node_params(node_name)
-
-        # Generate the screen command with dynamic parameters
-        screen_command = f"screen -wipe; screen -L -dmS LACCS bash -lc \"cd {params['laccs_path']} && ulimit -n 204800 && ulimit -s 81920 && ./LACCS --user_name=guest --password=guest_password --data_id=uptodate --D:node_name={params['node_name']} --D:device_name={params['device_name']} --D:ch00={params['ch00']} --D:ch01={params['ch01']} --D:ch02={params['ch02']} --D:ch03={params['ch03']} --D:ch04={params['ch04']} --D:ch05={params['ch05']}; exec bash\""
+            if not response:
+                # User canceled
+                self.log_message(
+                    f"User aborted starting service on node {node_name} ({ip})"
+                )
+                return
 
         self.log_message(
             f"Starting service on {node_name} ({ip}) with command: {screen_command}"
@@ -603,12 +629,23 @@ class NodeController:
         # Command to terminate the screen session named LACCS
         stop_command = "screen -S LACCS -X quit"
 
+        # Show confirmation dialog
+        response = messagebox.askyesno(
+            "Stop Service",
+            f"Stopping service on node {node_name} ({ip}).\n\n"
+            + f"Command to be executed:\n{stop_command}\n\n" 
+            + "Do you want to proceed?",
+        )
+
+        if not response:
+            # User canceled
+            self.log_message(
+                f"User aborted stopping service on node {node_name} ({ip})"
+            )
+            return
+
         self.log_message(
             f"Stopping service on {node_name} ({ip}) with command: {stop_command}"
-        )
-        messagebox.showinfo(
-            "Stop Service",
-            f"Stopping service on {ip}\n\nCommand to be executed:\n{stop_command}",
         )
 
         # Execute the command via SSH
@@ -631,11 +668,22 @@ class NodeController:
         # Start command with dynamic parameters
         start_command = f"screen -wipe; screen -L -dmS LACCS bash -lc \"cd {params['laccs_path']} && ulimit -n 204800 && ulimit -s 81920 && ./LACCS --user_name=guest --password=guest_password --data_id=uptodate --D:node_name={params['node_name']} --D:device_name={params['device_name']} --D:ch00={params['ch00']} --D:ch01={params['ch01']} --D:ch02={params['ch02']} --D:ch03={params['ch03']} --D:ch04={params['ch04']} --D:ch05={params['ch05']}; exec bash\""
 
-        self.log_message(f"Restarting service on {node_name} ({ip})")
-        messagebox.showinfo(
+        # Show confirmation dialog
+        response = messagebox.askyesno(
             "Restart Service",
-            f"Restarting service on {ip}\n\nCommands to be executed:\n1. {stop_command}\n2. {start_command}",
+            f"Restarting service on node {node_name} ({ip}).\n\n"
+            + f"Commands to be executed:\n1. {stop_command}\n2. {start_command}\n\n" 
+            + "Do you want to proceed?",
         )
+
+        if not response:
+            # User canceled
+            self.log_message(
+                f"User aborted restarting service on node {node_name} ({ip})"
+            )
+            return
+
+        self.log_message(f"Restarting service on {node_name} ({ip})")
 
         # Execute the commands via SSH
         stop_result = self.execute_ssh_command(ip, stop_command)
@@ -1485,7 +1533,7 @@ class NodeController:
     def check_all_nodes_status(self):
         import concurrent.futures
 
-        while not self.stop_status_check:
+        while not self.stop_status_check and self.main_loop_active:
             # Create a thread pool with a maximum of 5 worker threads
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 # Submit all node status checks as concurrent tasks
@@ -1503,45 +1551,65 @@ class NodeController:
                     try:
                         future.result()  # This will raise exceptions if any occurred during execution
                     except Exception as e:
-                        self.log_message(
-                            f"ERROR in status check for {node_name}: {str(e)}"
-                        )
-                        # Update status in main thread
-                        self.root.after(
-                            0,
-                            lambda name=node_name: self.update_node_status(
-                                name, "Error"
-                            ),
-                        )
+                        # Check if main loop is still active before updating UI
+                        if self.main_loop_active:
+                            try:
+                                self.log_message(
+                                    f"ERROR in status check for {node_name}: {str(e)}"
+                                )
+                                # Update status in main thread
+                                self.root.after(
+                                    0,
+                                    lambda name=node_name: self.update_node_status(
+                                        name, "Error"
+                                    ),
+                                )
+                            except Exception:
+                                # Prevent thread from crashing if main loop has terminated
+                                print(f"ERROR in status check for {node_name}: {str(e)}")
 
-            # Check every 30 seconds
-            time.sleep(30)
+            # Responsive sleep - check stop flag every second
+            sleep_time = 30
+            while sleep_time > 0 and not self.stop_status_check and self.main_loop_active:
+                time.sleep(1)
+                sleep_time -= 1
 
     def _check_node_status_async(self, node_name, ip):
         """
         Async version of _check_node_status that performs the status check
         in a worker thread and then updates the UI in the main thread.
         """
+        # Check if we should skip this node due to previous timeouts
+        current_time = time.time()
+        if node_name in self.timed_out_nodes:
+            last_check_time, consecutive_timeouts = self.timed_out_nodes[node_name]
+            if consecutive_timeouts >= self.MAX_CONSECUTIVE_TIMEOUTS and \
+               (current_time - last_check_time) < self.TIMEOUT_RETRY_INTERVAL:
+                # Skip temporarily - will check again after retry interval
+                return
+
         try:
             # Skip status check for localhost
             if ip == "127.0.0.1":
-                self.root.after(
-                    0,
-                    lambda name=node_name: (
-                        self.log_message_ignore(
-                            f"Skipping status check for localhost node {name}"
+                if self.main_loop_active:
+                    self.root.after(
+                        0,
+                        lambda name=node_name: (
+                            self.log_message_ignore(
+                                f"Skipping status check for localhost node {name}"
+                            ),
+                            self.update_node_status(name, "Localhost"),
                         ),
-                        self.update_node_status(name, "Localhost"),
-                    ),
-                )
+                    )
                 return
 
-            self.root.after(
-                0,
-                lambda name=node_name, addr=ip: self.log_message_ignore(
-                    f"Checking status for {name} ({addr})..."
-                ),
-            )
+            if self.main_loop_active:
+                self.root.after(
+                    0,
+                    lambda name=node_name, addr=ip: self.log_message_ignore(
+                        f"Checking status for {name} ({addr})..."
+                    ),
+                )
 
             # First check if the screen session named LACCS exists
             # This command returns 0 if the session exists, 1 otherwise
@@ -1584,46 +1652,86 @@ class NodeController:
                     client.close()
                 except Exception:
                     pass
+
+                # Reset timeout tracking for this node since we got a successful response
+                if node_name in self.timed_out_nodes:
+                    del self.timed_out_nodes[node_name]
+
             except paramiko.AuthenticationException:
-                self.root.after(
-                    0,
-                    lambda name=node_name, addr=ip: self.log_message(
-                        f"Authentication failed for {name} ({addr})"
-                    ),
-                )
+                if self.main_loop_active:
+                    self.root.after(
+                        0,
+                        lambda name=node_name, addr=ip: self.log_message(
+                            f"Authentication failed for {name} ({addr})"
+                        ),
+                    )
                 status = "Error"
             except paramiko.SSHException as e:
-                self.root.after(
-                    0,
-                    lambda name=node_name, err=str(e): self.log_message(
-                        f"SSH error checking status for {name}: {err}"
-                    ),
-                )
+                # Handle timeout specifically
+                if "timed out" in str(e):
+                    # Update timeout tracking
+                    if node_name in self.timed_out_nodes:
+                        last_time, count = self.timed_out_nodes[node_name]
+                        self.timed_out_nodes[node_name] = (current_time, count + 1)
+                    else:
+                        self.timed_out_nodes[node_name] = (current_time, 1)
+                
+                if self.main_loop_active:
+                    self.root.after(
+                        0,
+                        lambda name=node_name, err=str(e): self.log_message(
+                            f"SSH error checking status for {name}: {err}"
+                        ),
+                    )
                 status = "Error"
             except Exception as e:
-                self.root.after(
-                    0,
-                    lambda name=node_name, err=str(e): self.log_message(
-                        f"Error checking status for {name}: {err}"
-                    ),
-                )
+                # Handle timeout specifically
+                if "timed out" in str(e):
+                    # Update timeout tracking
+                    if node_name in self.timed_out_nodes:
+                        last_time, count = self.timed_out_nodes[node_name]
+                        self.timed_out_nodes[node_name] = (current_time, count + 1)
+                    else:
+                        self.timed_out_nodes[node_name] = (current_time, 1)
+                
+                if self.main_loop_active:
+                    self.root.after(
+                        0,
+                        lambda name=node_name, err=str(e): self.log_message(
+                            f"Error checking status for {name}: {err}"
+                        ),
+                    )
                 status = "Error"
 
-            # Update status in main thread
-            self.root.after(
-                0, lambda name=node_name, s=status: self.update_node_status(name, s)
-            )
+            # Update status in main thread if main loop is still active
+            if self.main_loop_active:
+                try:
+                    self.root.after(
+                        0, lambda name=node_name, s=status: self.update_node_status(name, s)
+                    )
+                except Exception:
+                    # Prevent thread from crashing if main loop has terminated
+                    pass
         except Exception as e:
-            self.root.after(
-                0,
-                lambda name=node_name, err=str(e): self.log_message(
-                    f"ERROR checking status for {name}: {err}"
-                ),
-            )
-            # Update status in main thread
-            self.root.after(
-                0, lambda name=node_name: self.update_node_status(name, "Error")
-            )
+            # Log error without attempting UI updates if main loop is inactive
+            if self.main_loop_active:
+                try:
+                    self.root.after(
+                        0,
+                        lambda name=node_name, err=str(e): self.log_message(
+                            f"ERROR checking status for {name}: {err}"
+                        ),
+                    )
+                    # Update status in main thread
+                    self.root.after(
+                        0, lambda name=node_name: self.update_node_status(name, "Error")
+                    )
+                except Exception:
+                    # Prevent thread from crashing if main loop has terminated
+                    pass
+            else:
+                # Just print to console if main loop is inactive
+                print(f"ERROR checking status for {node_name}: {str(e)}")
 
     def _check_node_status(self, node_name, ip):
         try:
@@ -1696,32 +1804,45 @@ class NodeController:
     def update_node_status(self, node_name, status):
         self.model.update_node_status(node_name, status)
 
-        for item in self.view.status_tree.get_children():
-            item_values = self.view.status_tree.item(item, "values")
-            if item_values and item_values[0] == node_name:
-                # Update existing item instead of creating a new one
-                self.view.status_tree.item(
-                    item,
-                    values=(
-                        node_name,
-                        item_values[1] if len(item_values) > 1 else "N/A",
-                        status,
-                    ),
-                )
+        # Check if main loop is still active before updating UI
+        if self.main_loop_active:
+            try:
+                for item in self.view.status_tree.get_children():
+                    item_values = self.view.status_tree.item(item, "values")
+                    if item_values and item_values[0] == node_name:
+                        # Update existing item instead of creating a new one
+                        self.view.status_tree.item(
+                            item,
+                            values=(
+                                node_name,
+                                item_values[1] if len(item_values) > 1 else "N/A",
+                                status,
+                            ),
+                        )
 
-                if status.lower() == "running":
-                    self.view.status_tree.item(item, tags=("status_ok",))
-                elif status.lower() == "stopped":
-                    self.view.status_tree.item(item, tags=("status_stopped",))
-                elif status.lower() == "error":
-                    self.view.status_tree.item(item, tags=("status_error",))
-                elif status.lower() == "standalone":
-                    self.view.status_tree.item(item, tags=("status_standalone",))
-                else:
-                    self.view.status_tree.item(item, tags=("status_unknown",))
-                break
+                        if status.lower() == "running":
+                            self.view.status_tree.item(item, tags=("status_ok",))
+                        elif status.lower() == "stopped":
+                            self.view.status_tree.item(item, tags=("status_stopped",))
+                        elif status.lower() == "error":
+                            self.view.status_tree.item(item, tags=("status_error",))
+                        elif status.lower() == "standalone":
+                            self.view.status_tree.item(item, tags=("status_standalone",))
+                        else:
+                            self.view.status_tree.item(item, tags=("status_unknown",))
+                        break
 
-        self.log_message_ignore(f"Status updated for {node_name}: {status}")
+                # Log the status update if main loop is active
+                try:
+                    self.log_message_ignore(f"Status updated for {node_name}: {status}")
+                except Exception:
+                    pass
+            except Exception:
+                # Prevent thread from crashing if UI has been destroyed
+                pass
+        else:
+            # Just log to console if main loop is inactive
+            print(f"Status updated for {node_name}: {status}")
 
     def setup_log_file(self):
         """Create log file with timestamp"""
@@ -1767,19 +1888,24 @@ class NodeController:
         # Add to log history with level information
         self.log_history.append((timestamp, message, tag))
 
-        # Write to log file
-        if self.log_file:
-            try:
+        # Write to log file if it's open
+        try:
+            if self.log_file and not self.log_file.closed:
                 self.log_file.write(f"{timestamp}\t{message}\n")
                 self.log_file.flush()
-            except Exception as e:
-                print(f"Failed to write to log file: {str(e)}")
+        except Exception as e:
+            print(f"Failed to write to log file: {str(e)}")
 
         # Print to console for debugging
         print(log_entry.strip())
 
-        # Update log display with filtering
-        self.filter_log_entries()
+        # Update log display with filtering if main loop is still active
+        if self.main_loop_active:
+            try:
+                # Use after to ensure UI updates happen in the main thread
+                self.root.after(0, self.filter_log_entries)
+            except Exception:
+                pass
 
     def filter_log_entries(self, *args):
         """Filter log entries based on search term with fuzzy matching"""
@@ -1842,28 +1968,49 @@ class NodeController:
             )
 
     def on_closing(self):
+        # Set flag to stop main loop activities
+        self.main_loop_active = False
+        
+        # Set flag to stop status check thread
+        self.stop_status_check = True
+
         # Check for unsaved changes
         if self.has_unsaved_changes:
-            response = messagebox.askyesnocancel(
-                "Unsaved Changes",
-                "You have unsaved changes.\n"
-                + "Do you want to save them before exiting?",
-            )
-
-            if response is None:  # User canceled
-                return
-            elif response is True:  # User wants to save
-                self.save_changes()
-
-        # Close log file if open
-        if self.log_file:
             try:
-                self.log_file.close()
-            except Exception as e:
-                print(f"Failed to close log file: {str(e)}")
+                response = messagebox.askyesnocancel(
+                    "Unsaved Changes",
+                    "You have unsaved changes.\n"
+                    + "Do you want to save them before exiting?",
+                )
 
-        self.stop_status_check = True
-        self.root.destroy()
+                if response is None:  # User canceled
+                    # Restore flags if user cancels exit
+                    self.main_loop_active = True
+                    self.stop_status_check = False
+                    return
+                elif response is True:  # User wants to save
+                    self.save_changes()
+            except Exception:
+                # If messagebox fails, proceed with closing
+                pass
+
+        # Give threads a chance to terminate gracefully
+        import time
+        time.sleep(1)  # Short delay to allow threads to see the stop flags
+
+        # Close log file if open and not already closed
+        try:
+            if self.log_file and not self.log_file.closed:
+                self.log_file.close()
+        except Exception as e:
+            print(f"Failed to close log file: {str(e)}")
+
+        # Exit application
+        try:
+            self.root.destroy()
+        except Exception:
+            # Handle case where root window is already destroyed
+            pass
 
     def save_data(self):
         try:
@@ -1888,7 +2035,13 @@ class NodeController:
 
 class NodeEditor(NodeController):
     def __init__(self, root):
+        # Call parent constructor to initialize all attributes
         super().__init__(root)
+        
+        # Ensure main_loop_active is accessible
+        # This is a safeguard to ensure the attribute exists regardless of inheritance order
+        if not hasattr(self, 'main_loop_active'):
+            self.main_loop_active = True
 
     def add_tsv_item(self):
         node_name, ip = self.get_selected_node_info()
