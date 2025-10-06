@@ -22,7 +22,7 @@ class NodeController:
         # Log related settings - Initialize first
         self.log_history = []  # Store all log entries for filtering
         self.log_file = None
-        self.setup_log_file()
+        # self.setup_log_file()
 
         # Bind events and commands
         self._bind_events()
@@ -80,6 +80,9 @@ class NodeController:
         self.view.open_filedb_callback = self.open_filedb
         self.view.save_changes_callback = self.save_changes
         self.view.load_service_parameter_callback = self.load_service_parameter
+        self.view.update_shared_lib_callback = self.update_shared_lib
+        self.view.update_shared_lib_all_callback = self.update_shared_lib_all
+        self.view.stop_service_all_callback = self.stop_service_all
 
         # Bind authentication apply button
         self.view.apply_auth_button.config(command=self.apply_authentication)
@@ -290,13 +293,33 @@ class NodeController:
     def load_service_parameter(self):
         """Load service parameters from BDMap.json file and update all nodes' parameters"""
         try:
-            # Open file dialog for JSON files
-            file_path = filedialog.askopenfilename(
-                title="Select BDMap.json File",
-                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-                initialdir=os.path.dirname(os.path.abspath(__file__)),
-                parent=self.root
-            )
+            # Get the directory of the executable
+            import sys
+            exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            default_file_path = os.path.join(exe_dir, "BDMap.json")
+            
+            file_path = None
+            
+            # Check if default BDMap.json exists
+            if os.path.exists(default_file_path):
+                file_path = default_file_path
+            else:
+                # Show message and ask user if they want to select another file
+                response = messagebox.askyesno(
+                    "File Not Found",
+                    "BDMap.json not found in executable directory.\nDo you want to select another file?"
+                )
+                
+                if response:
+                    # Open file dialog for JSON files
+                    file_path = filedialog.askopenfilename(
+                        title="Select BDMap.json File",
+                        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                        initialdir=exe_dir,
+                        parent=self.root
+                    )
+                else:
+                    return  # User chose not to select a file
 
             if not file_path:
                 return  # User canceled file selection
@@ -653,6 +676,97 @@ class NodeController:
 
         if result == "success":
             self.root.after(1000, lambda: self.update_node_status(node_name, "Stopped"))
+
+    def stop_service_all(self):
+        """Stop service on all nodes using thread pool - UI-safe version"""
+        # Show confirmation dialog
+        from tkinter import messagebox
+        confirm_message = "Stopping service on ALL nodes.\n\n"
+        confirm_message += "This operation will:\n"
+        confirm_message += "1. Stop service on each node\n\n"
+        confirm_message += "This operation will run without further confirmation.\n"
+        confirm_message += f"Are you sure you want to stop services on all {len(self.model.non_local_nodes)} nodes?"
+
+        response = messagebox.askyesno("Batch Stop Service", confirm_message)
+        if not response:
+            self.log_message("Batch stop service operation cancelled by user")
+            return
+
+        # Create and start a new thread to run the actual stop process
+        # This keeps the UI responsive
+        stop_thread = threading.Thread(
+            target=self._stop_service_all_async,
+            daemon=True
+        )
+        stop_thread.start()
+
+    def _stop_service_all_async(self):
+        """Helper method to perform the actual stop process in a background thread"""
+        # Log message in the main thread
+        if self.main_loop_active:
+            self.root.after(
+                0,
+                lambda: self.log_message(f"Starting batch stop of services on all nodes...")
+            )
+        
+        # Use thread pool to process all nodes
+        import concurrent.futures
+        
+        # Create a thread pool with a maximum of 10 worker threads
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            # Submit all node stop tasks as concurrent tasks
+            future_to_node = {
+                executor.submit(self._stop_service_node, node_name, ip): 
+                node_name 
+                for node_name, ip in self.model.non_local_nodes
+            }
+
+            # Process completed tasks
+            for future in concurrent.futures.as_completed(future_to_node):
+                node_name = future_to_node[future]
+                try:
+                    future.result()  # This will raise exceptions if any occurred during execution
+                except Exception as e:
+                    # Log the error
+                    if self.main_loop_active:
+                        try:
+                            self.log_message(f"ERROR stopping service on {node_name}: {str(e)}")
+                            # Update status in main thread
+                            self.root.after(
+                                0,
+                                lambda name=node_name: self.update_node_status(name, "Error"),
+                            )
+                        except Exception:
+                            # Prevent thread from crashing if main loop has terminated
+                            print(f"ERROR stopping service on {node_name}: {str(e)}")
+
+        # Log completion message in the main thread
+        if self.main_loop_active:
+            self.root.after(
+                0,
+                lambda: self.log_message("Batch stop of services completed for all nodes")
+            )
+
+    def _stop_service_node(self, node_name, ip):
+        """Helper method to stop service on a single node"""
+        # Command to terminate the screen session named LACCS
+        stop_command = "screen -S LACCS -X quit"
+        
+        # Log message in the main thread
+        if self.main_loop_active:
+            self.root.after(
+                0,
+                lambda name=node_name, ip=ip, cmd=stop_command: self.log_message(f"Stopping service on {name} ({ip}) with command: {cmd}")
+            )
+        
+        # Execute the command via SSH
+        result = self.execute_ssh_command(ip, stop_command)
+        
+        if result == "success" and self.main_loop_active:
+            self.root.after(
+                1000,
+                lambda name=node_name: self.update_node_status(name, "Stopped")
+            )
 
     def restart_service(self):
         node_name, ip = self.get_selected_node_info()
@@ -1578,16 +1692,14 @@ class NodeController:
         """
         Async version of _check_node_status that performs the status check
         in a worker thread and then updates the UI in the main thread.
+        Modified to skip nodes that have failed once (no retry)
         """
-        # Check if we should skip this node due to previous timeouts
-        current_time = time.time()
+        # Check if we should skip this node due to previous failures
+        # If node has failed before, skip it completely (no retry)
         if node_name in self.timed_out_nodes:
-            last_check_time, consecutive_timeouts = self.timed_out_nodes[node_name]
-            if consecutive_timeouts >= self.MAX_CONSECUTIVE_TIMEOUTS and \
-               (current_time - last_check_time) < self.TIMEOUT_RETRY_INTERVAL:
-                # Skip temporarily - will check again after retry interval
-                return
+            return
 
+        current_time = time.time()
         try:
             # Skip status check for localhost
             if ip == "127.0.0.1":
@@ -1653,9 +1765,8 @@ class NodeController:
                 except Exception:
                     pass
 
-                # Reset timeout tracking for this node since we got a successful response
-                if node_name in self.timed_out_nodes:
-                    del self.timed_out_nodes[node_name]
+                # Leave timeout tracking in place even after successful connection
+                # This ensures that once a node fails once, it will be skipped in future checks
 
             except paramiko.AuthenticationException:
                 if self.main_loop_active:
@@ -1669,12 +1780,8 @@ class NodeController:
             except paramiko.SSHException as e:
                 # Handle timeout specifically
                 if "timed out" in str(e):
-                    # Update timeout tracking
-                    if node_name in self.timed_out_nodes:
-                        last_time, count = self.timed_out_nodes[node_name]
-                        self.timed_out_nodes[node_name] = (current_time, count + 1)
-                    else:
-                        self.timed_out_nodes[node_name] = (current_time, 1)
+                    # Mark node as failed - will be skipped in future checks
+                    self.timed_out_nodes[node_name] = (current_time, 1)
                 
                 if self.main_loop_active:
                     self.root.after(
@@ -1687,12 +1794,8 @@ class NodeController:
             except Exception as e:
                 # Handle timeout specifically
                 if "timed out" in str(e):
-                    # Update timeout tracking
-                    if node_name in self.timed_out_nodes:
-                        last_time, count = self.timed_out_nodes[node_name]
-                        self.timed_out_nodes[node_name] = (current_time, count + 1)
-                    else:
-                        self.timed_out_nodes[node_name] = (current_time, 1)
+                    # Mark node as failed - will be skipped in future checks
+                    self.timed_out_nodes[node_name] = (current_time, 1)
                 
                 if self.main_loop_active:
                     self.root.after(
@@ -1967,6 +2070,308 @@ class NodeController:
                 0, lambda name=node_name, addr=ip: self._check_node_status(name, addr)
             )
 
+    def update_shared_lib(self):
+        """Update shared library for a selected node"""
+        node_name, ip = self.get_selected_node_info()
+        if not node_name or not ip:
+            return
+
+        # Step 1: Ask user to select SO file
+        from tkinter import filedialog
+        file_path = filedialog.askopenfilename(
+            title="Select Shared Library File",
+            filetypes=[("SO files", "*.so"), ("All files", "*")],
+        )
+
+        if not file_path:
+            self.log_message("Library update cancelled by user")
+            return
+
+        # Get filename
+        import os
+        filename = os.path.basename(file_path)
+        target_path = "/opt/LACCS/Controls/"
+        remote_file_path = target_path + filename
+        backup_command = "mv /opt/LACCS/Controls/libBeamLossMonitor.so* /tmp"
+
+        # Step 2: Show confirmation dialog with commands
+        from tkinter import messagebox
+        confirm_message = f"Updating shared library on node {node_name} ({ip}).\n\n"
+        confirm_message += "Commands to be executed:\n"
+        confirm_message += "1. Stop service\n"
+        confirm_message += f"2. {backup_command}\n"
+        confirm_message += f"3. Upload {filename} to {target_path}\n"
+        confirm_message += "4. Restart service (optional)\n\n"
+        confirm_message += "Do you want to proceed?"
+
+        response = messagebox.askyesno("Update Shared Library", confirm_message)
+        if not response:
+            self.log_message(f"User cancelled library update on node {node_name}")
+            return
+
+        try:
+            # Step 3: Stop service
+            self.log_message(f"Stopping service on node {node_name}...")
+            # Get authentication credentials
+            username, password = self.model.get_node_credentials(node_name)
+            # Stop screen session
+            stop_command = "screen -S LACCS -X quit"
+            result = self.execute_ssh_command(ip, stop_command)
+            if result != "success":
+                # Also try to kill standalone process
+                kill_command = "pkill -f LACCS"
+                self.execute_ssh_command(ip, kill_command)
+            self.log_message(f"Service stopped on node {node_name}")
+
+            # Step 4: Execute backup command
+            self.log_message(f"Backing up existing library files on node {node_name}...")
+            result = self.execute_ssh_command(ip, backup_command)
+            if result is None:
+                raise Exception("Failed to backup existing library files")
+            self.log_message(f"Existing library files backed up to /tmp on node {node_name}")
+
+            # Step 5: Upload new SO file
+            self.log_message(f"Uploading {filename} to node {node_name}...")
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(ip, username=username, password=password)
+            
+            # Use SFTP to upload the file
+            sftp = client.open_sftp()
+            try:
+                sftp.put(file_path, remote_file_path)
+            finally:
+                try:
+                    sftp.close()
+                except Exception:
+                    pass
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            
+            self.log_message(f"Library file {filename} uploaded successfully to node {node_name}")
+
+            # Step 6: Ask if user wants to restart service
+            restart_response = messagebox.askyesno(
+                "Restart Service",
+                f"Library update completed on node {node_name}.\n\nDo you want to restart the service?"
+            )
+            
+            if restart_response:
+                self.log_message(f"Restarting service on node {node_name}...")
+                # Start service using screen with node-specific path and parameters
+                node_params = self.model.get_node_params(node_name)
+                laccs_path = node_params["laccs_path"].replace("#", "")  # Remove # if present
+                if not laccs_path.endswith("/"):
+                    laccs_path += "/"
+                screen_command = f"screen -wipe; screen -L -dmS LACCS bash -lc \"cd {laccs_path} && ulimit -n 204800 && ulimit -s 81920 && ./LACCS --user_name=guest --password=guest_password --data_id=uptodate --D:node_name={node_params['node_name']} --D:device_name={node_params['device_name']} --D:ch00={node_params['ch00']} --D:ch01={node_params['ch01']} --D:ch02={node_params['ch02']} --D:ch03={node_params['ch03']} --D:ch04={node_params['ch04']} --D:ch05={node_params['ch05']}; exec bash\""
+                result = self.execute_ssh_command(ip, screen_command)
+                if result == "success":
+                    self.root.after(1000, lambda: self.update_node_status(node_name, "Running"))
+                    self.log_message(f"Service restarted successfully on node {node_name}")
+                else:
+                    self.root.after(1000, lambda: self.update_node_status(node_name, "Stopped"))
+                    self.log_message(f"Failed to restart service on node {node_name}")
+            else:
+                self.log_message(f"Service restart skipped on node {node_name}")
+
+        except Exception as e:
+            error_msg = f"Failed to update shared library on node {node_name}: {str(e)}"
+            self.log_message(f"ERROR: {error_msg}")
+            messagebox.showerror("Update Error", error_msg)
+            return
+
+        self.log_message(f"Shared library update completed successfully on node {node_name}")
+
+    def update_shared_lib_all(self):
+        """Update shared library for all nodes using thread pool - UI-safe version"""
+        from tkinter import filedialog
+        file_path = filedialog.askopenfilename(
+            title="Select Shared Library File",
+            filetypes=[("SO files", "*.so"), ("All files", "*")],
+        )
+
+        if not file_path:
+            self.log_message("Batch library update cancelled by user")
+            return
+
+        # Get filename
+        import os
+        filename = os.path.basename(file_path)
+        
+        # Show confirmation dialog
+        from tkinter import messagebox
+        confirm_message = "Updating shared library on ALL nodes.\n\n"
+        confirm_message += f"Library file: {filename}\n\n"
+        confirm_message += "This operation will:\n"
+        confirm_message += "1. Stop service on each node\n"
+        confirm_message += "2. Backup existing library files to /tmp\n"
+        confirm_message += "3. Upload new library file\n"
+        confirm_message += "4. Restart service\n\n"
+        confirm_message += "This operation will run without further confirmation.\n"
+        confirm_message += f"Are you sure you want to update all {len(self.model.non_local_nodes)} nodes?"
+
+        response = messagebox.askyesno("Batch Update Shared Library", confirm_message)
+        if not response:
+            self.log_message("Batch library update cancelled by user")
+            return
+
+        # Create and start a new thread to run the actual update process
+        # This keeps the UI responsive
+        update_thread = threading.Thread(
+            target=self._update_shared_lib_all_async, 
+            args=(file_path, filename),
+            daemon=True
+        )
+        update_thread.start()
+
+    def _update_shared_lib_all_async(self, file_path, filename):
+        """Helper method to perform the actual update process in a background thread"""
+        # Log message in the main thread
+        if self.main_loop_active:
+            self.root.after(
+                0,
+                lambda: self.log_message(f"Starting batch update of shared library {filename} on all nodes...")
+            )
+        
+        # Read the file content once to avoid multiple reads
+        try:
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+        except Exception as e:
+            if self.main_loop_active:
+                self.root.after(
+                    0,
+                    lambda e: self.log_message(f"ERROR reading library file: {str(e)}")
+                )
+            return
+        
+        # Use thread pool to process all nodes
+        import concurrent.futures
+        
+        # Create a thread pool with a maximum of 20 worker threads
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            # Submit all node update tasks as concurrent tasks
+            future_to_node = {
+                executor.submit(self._update_shared_lib_node, node_name, ip, filename, file_content): 
+                node_name 
+                for node_name, ip in self.model.non_local_nodes
+            }
+
+            # Process completed tasks
+            for future in concurrent.futures.as_completed(future_to_node):
+                node_name = future_to_node[future]
+                try:
+                    future.result()  # This will raise exceptions if any occurred during execution
+                except Exception as e:
+                    # Log the error
+                    if self.main_loop_active:
+                        try:
+                            self.log_message(f"ERROR updating library on {node_name}: {str(e)}")
+                            # Update status in main thread
+                            self.root.after(
+                                0,
+                                lambda name=node_name: self.update_node_status(name, "Error"),
+                            )
+                        except Exception:
+                            # Prevent thread from crashing if main loop has terminated
+                            print(f"ERROR updating library on {node_name}: {str(e)}")
+
+        # Log completion message in the main thread
+        if self.main_loop_active:
+            self.root.after(
+                0,
+                lambda: self.log_message("Batch update of shared library completed for all nodes")
+            )
+
+    def _update_shared_lib_node(self, node_name, ip, filename, file_content):
+        """Helper method to update shared library on a single node"""
+        try:
+            # Get authentication credentials
+            username, password = self.model.get_node_credentials(node_name)
+            
+            # Step 1: Stop service
+            if self.main_loop_active:
+                self.root.after(
+                    0,
+                    lambda name=node_name, status="Updating...": 
+                    self.update_node_status(name, status),
+                )
+                self.root.after(
+                    0,
+                    lambda msg=f"Stopping service on node {node_name}...": 
+                    self.log_message(msg),
+                )
+            
+            # Stop screen session and standalone process
+            stop_command = "screen -S LACCS -X quit"
+            self.execute_ssh_command(ip, stop_command)
+            kill_command = "pkill -f LACCS"
+            self.execute_ssh_command(ip, kill_command)
+            
+            # Wait a moment to ensure service has stopped
+            import time
+            time.sleep(1)
+
+            # Step 2: Execute backup command
+            backup_command = "mv /opt/LACCS/Controls/libBeamLossMonitor.so* /tmp"
+            self.execute_ssh_command(ip, backup_command)
+
+            # Step 3: Upload new SO file
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(ip, username=username, password=password)
+            
+            # Use SFTP to upload the file
+            sftp = client.open_sftp()
+            try:
+                # Create a file-like object from the content
+                from io import BytesIO
+                file_obj = BytesIO(file_content)
+                sftp.putfo(file_obj, f"/opt/LACCS/Controls/{filename}")
+            finally:
+                try:
+                    sftp.close()
+                except Exception:
+                    pass
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+            # Step 4: Restart service with node-specific path and parameters
+            node_params = self.model.get_node_params(node_name)
+            laccs_path = node_params["laccs_path"].replace("#", "")  # Remove # if present
+            if not laccs_path.endswith("/"):
+                laccs_path += "/"
+            start_command = f"screen -wipe; screen -L -dmS LACCS bash -lc \"cd {laccs_path} && ulimit -n 204800 && ulimit -s 81920 && ./LACCS --user_name=guest --password=guest_password --data_id=uptodate --D:node_name={node_params['node_name']} --D:device_name={node_params['device_name']} --D:ch00={node_params['ch00']} --D:ch01={node_params['ch01']} --D:ch02={node_params['ch02']} --D:ch03={node_params['ch03']} --D:ch04={node_params['ch04']} --D:ch05={node_params['ch05']}; exec bash\""
+            self.execute_ssh_command(ip, start_command)
+
+            # Update status
+            if self.main_loop_active:
+                self.root.after(
+                    0,
+                    lambda name=node_name: self.update_node_status(name, "Running"),
+                )
+                self.root.after(
+                    0,
+                    lambda msg=f"Library update completed successfully on node {node_name}": 
+                    self.log_message(msg),
+                )
+
+        except Exception as e:
+            error_msg = f"Failed to update shared library on node {node_name}: {str(e)}"
+            if self.main_loop_active:
+                self.root.after(
+                    0,
+                    lambda msg=f"ERROR: {error_msg}": 
+                    self.log_message(msg),
+                )
+            raise
+
     def on_closing(self):
         # Set flag to stop main loop activities
         self.main_loop_active = False
@@ -2042,6 +2447,38 @@ class NodeEditor(NodeController):
         # This is a safeguard to ensure the attribute exists regardless of inheritance order
         if not hasattr(self, 'main_loop_active'):
             self.main_loop_active = True
+        
+        # Create main menu bar with help option
+        self.create_main_menu()
+    
+    def create_main_menu(self):
+        """Create main menu bar with File and Help options"""
+        # Create menu bar
+        self.menu_bar = tk.Menu(self.root)
+        
+        # Create File menu
+        file_menu = tk.Menu(self.menu_bar, tearoff=0)
+        file_menu.add_command(label="Save Changes", command=self.save_changes, accelerator="Ctrl+S")
+        file_menu.add_command(label="Open FileDB", command=self.open_filedb)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.on_closing)
+        
+        # Create Help menu
+        help_menu = tk.Menu(self.menu_bar, tearoff=0)
+        help_menu.add_command(label="Help", command=self.show_help)
+        
+        # Add menus to menu bar
+        self.menu_bar.add_cascade(label="File", menu=file_menu)
+        self.menu_bar.add_cascade(label="Help", menu=help_menu)
+        
+        # Attach menu bar to the root window
+        self.root.config(menu=self.menu_bar)
+    
+    def show_help(self):
+        """Show the help window"""
+        from launcher.help_window import HelpWindow
+        help_window = HelpWindow(self.root)
+        help_window.show()
 
     def add_tsv_item(self):
         node_name, ip = self.get_selected_node_info()

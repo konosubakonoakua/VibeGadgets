@@ -125,9 +125,9 @@ class NodeView:
             label="Restart Service", command=lambda: self.restart_service_callback())
         self.context_menu.add_separator()
         self.context_menu.add_command(
-            label="Deploy", command=lambda: self.deploy_service_callback())
+            label="Deploy (Local)", command=lambda: self.deploy_service_callback())
         self.context_menu.add_command(
-            label="Launch BDBLM", command=lambda: self.launch_bdblm_callback())
+            label="Launch BDBLM (Local)", command=lambda: self.launch_bdblm_callback())
         self.context_menu.add_command(
             label="Connect via Putty", command=lambda: self.connect_via_putty_callback())
         self.context_menu.add_separator()
@@ -144,6 +144,14 @@ class NodeView:
             label="Open FileDB", command=lambda: self.open_filedb_callback())
         self.context_menu.add_command(
             label="Load Service Parameter", command=lambda: self.load_service_parameter_callback())
+        self.context_menu.add_separator()
+        self.context_menu.add_command(
+            label="Update Shared Lib", command=lambda: self.update_shared_lib_callback())
+        self.context_menu.add_command(
+            label="Update Shared Lib (All)", command=lambda: self.update_shared_lib_all_callback())
+        self.context_menu.add_separator()
+        self.context_menu.add_command(
+            label="Stop Service (All)", command=lambda: self.stop_service_all_callback())
         self.context_menu.add_separator()
         self.context_menu.add_command(
             label="Save Changes", command=lambda: self.save_changes_callback())
@@ -189,6 +197,15 @@ class NodeView:
         pass
 
     def load_service_parameter_callback(self):
+        pass
+
+    def update_shared_lib_callback(self):
+        pass
+
+    def update_shared_lib_all_callback(self):
+        pass
+        
+    def stop_service_all_callback(self):
         pass
 
     def show_context_menu(self, event):
